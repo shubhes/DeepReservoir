@@ -420,9 +420,8 @@ def niip_colab_like(ctx: RewardContext) -> float:
         return 0.0
 
     
-    regular_release_cfs = float(ctx.info["release_sj_main_cfs"])
-
-    delta = demand_cfs - regular_release_cfs
+    niip_release_cfs = float(ctx.info["release_niip_cfs"])
+    delta = demand_cfs - niip_release_cfs
     r = 1.0 - abs(delta) / (_NIIP_TOTAL_CFS_SUM + 1e-9)
 
     
@@ -458,7 +457,7 @@ def niip_colab_band(ctx: RewardContext) -> float:
         return 0.0
 
     # NIIP release: use NIIP component (NOT sanjuan_release)
-    niip_release_cfs = float(ctx.info.get("niip_release_cfs", 0.0))
+    niip_release_cfs = float(ctx.info.get("release_niip_cfs", 0.0))
     daily_release_af = niip_release_cfs * CFS_TO_AF_PER_DAY
 
     if daily_release_af > (1.05 * daily_demand_af):
