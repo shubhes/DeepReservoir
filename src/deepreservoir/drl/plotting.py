@@ -1523,6 +1523,11 @@ PLOT_REGISTRY: dict[str, Mapping[str, object]] = {
         "requires": ("df_train_updates",),
         "filename": "train_update_reward_heatmap.png",
     },
+    "niip_doy_percentiles_with_demand": {
+       "func": plot_niip_doy_percentiles_with_demand,
+       "requires": ("df_test",),
+       "filename": "niip_doy_percentiles_with_demand.png",
+    },
 }
 
 PLOT_GROUPS: dict[str, tuple[str, ...]] = {
