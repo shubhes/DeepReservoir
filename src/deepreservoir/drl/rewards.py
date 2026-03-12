@@ -428,6 +428,46 @@ def niip_colab_like(ctx: RewardContext) -> float:
     
     return float(np.clip(r, -1.0, 1.0))
 
+@register_reward("niip", "colab_band")
+def niip_colab_band(ctx: RewardContext) -> float:
+    """
+    NIIP reward matching Colab logic (banded, +/-5%).
+
+    Colab logic:
+      if 50 <= doy <= 300:
+        daily_demand_af = niip_daily_demand(doy) * 1.98211
+        daily_release_af = niip_release_cfs * 1.98211
+
+        if daily_release_af > 1.05*daily_demand_af: r = -0.5
+        elif 0.95*demand <= release <= 1.05*demand: r = +1.5
+        else: r = -0.5
+      else: r = 0
+    """
+    CFS_TO_AF_PER_DAY = 1.98211
+
+    doy = int(pd.to_datetime(ctx.date).timetuple().tm_yday)
+    if not (50 <= doy <= 300):
+        return 0.0
+
+    # Demand: niip_daily_demand returns cfs (as used in your Colab),
+    # then convert to AF/day
+    demand_cfs = float(niip_daily_demand(doy))
+    daily_demand_af = demand_cfs * CFS_TO_AF_PER_DAY
+
+    if daily_demand_af <= 0.0:
+        return 0.0
+
+    # NIIP release: use NIIP component (NOT sanjuan_release)
+    niip_release_cfs = float(ctx.info.get("niip_release_cfs", 0.0))
+    daily_release_af = niip_release_cfs * CFS_TO_AF_PER_DAY
+
+    if daily_release_af > (1.05 * daily_demand_af):
+        return -2.5
+    elif (0.95 * daily_demand_af) <= daily_release_af <= (1.05 * daily_demand_af):
+        return 10.5
+    else:
+        return -2.5
+
 # ---------------- SPR rewards ----------------
 
 _SPRING_PEAK_CURVE = SpringPeakReleaseCurve()
