@@ -975,6 +975,126 @@ def plot_spr_farmington_components_and_demand_timeseries(
     fig.tight_layout()
     return fig, ax
 
+def plot_niip_doy_percentiles_with_demand(
+    df: pd.DataFrame,
+    *,
+    sanjuan_col: str = "sanjuan_release_cfs",
+    niip_col: str = "niip_release_cfs",
+    doy_start: int = 50,
+    doy_end: int = 300,
+    figsize: tuple[float, float] = (10, 4),
+) -> tuple[plt.Figure, plt.Axes]:
+    """
+    NIIP plot (Colab-style DOY percentiles) with NIIP demand curve:
+
+      - San Juan release (agent component #1): median + IQR by DOY
+      - NIIP release (agent component #2):     median + IQR by DOY
+      - NIIP demand curve (deterministic):     line by DOY
+
+    All units are cfs.
+
+    Required:
+      - df.index is DatetimeIndex
+      - df contains columns: sanjuan_col and niip_col
+    """
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("df.index must be a DatetimeIndex.")
+
+    missing = [c for c in [sanjuan_col, niip_col] if c not in df.columns]
+    if missing:
+        raise ValueError(f"df is missing required columns for NIIP plot: {missing}")
+
+    # Compute DOY and restrict to NIIP season
+    doy = df.index.dayofyear.astype(int)
+    mask = (doy >= int(doy_start)) & (doy <= int(doy_end))
+    if not mask.any():
+        raise ValueError(f"No rows fall within DOY window {doy_start}-{doy_end}.")
+
+    df_season = df.loc[mask]
+    doy_season = doy[mask]
+
+    # Tidy frame for groupby quantiles
+    tidy = pd.DataFrame({
+        "DOY": doy_season.values,
+        "SanJuan": df_season[sanjuan_col].astype(float).values,
+        "NIIP": df_season[niip_col].astype(float).values,
+    })
+
+    def _doy_stats(values: pd.Series) -> pd.DataFrame:
+        g = values.groupby(tidy["DOY"])
+        return pd.DataFrame({
+            "median": g.median(),
+            "q25": g.quantile(0.25),
+            "q75": g.quantile(0.75),
+        })
+
+    sj_stats = _doy_stats(pd.Series(tidy["SanJuan"]))
+    niip_stats = _doy_stats(pd.Series(tidy["NIIP"]))
+
+    # Demand curve: deterministic by DOY (so "repeats every year" naturally)
+    doys = sj_stats.index.values
+    demand = np.array([float(niip_daily_demand(int(d))) for d in doys], dtype=float)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Style consistent with your file
+    ax.grid(True, which="major", linestyle=":", alpha=0.6)
+    for spine in ("top",):
+        ax.spines[spine].set_visible(False)
+
+    ax.tick_params(labelsize=11)
+    ax.set_xlabel("Day of year", fontsize=13)
+    ax.set_ylabel("Flow [cfs]", fontsize=13)
+
+    # San Juan: median + IQR
+    ax.plot(
+        sj_stats.index.values,
+        sj_stats["median"].values,
+        linewidth=1.8,
+        label="San Juan release (median)",
+    )
+    ax.fill_between(
+        sj_stats.index.values,
+        sj_stats["q25"].values,
+        sj_stats["q75"].values,
+        alpha=0.25,
+        label="San Juan IQR",
+    )
+
+    # NIIP: median + IQR
+    ax.plot(
+        niip_stats.index.values,
+        niip_stats["median"].values,
+        linewidth=1.8,
+        linestyle="--",
+        label="NIIP release (median)",
+    )
+    ax.fill_between(
+        niip_stats.index.values,
+        niip_stats["q25"].values,
+        niip_stats["q75"].values,
+        alpha=0.20,
+        label="NIIP IQR",
+    )
+
+    # Demand curve (line only)
+    ax.plot(
+        doys,
+        demand,
+        linewidth=1.8,
+        linestyle=":",
+        label="NIIP demand curve",
+    )
+
+    ax.set_title(f"NIIP seasonal distribution by DOY (DOY {doy_start}–{doy_end})", fontsize=14)
+
+    leg = ax.legend(loc="best", frameon=True)
+    leg.get_frame().set_alpha(0.9)
+    leg.get_frame().set_facecolor("white")
+
+    fig.tight_layout()
+    return fig, ax
+
 
 # -----------------------------------------------------------------------------
 # Training rewards
