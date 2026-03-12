@@ -1567,6 +1567,9 @@ PLOT_GROUPS: dict[str, tuple[str, ...]] = {
         "hydropower_timeseries",
         "spr_farmington_components_and_demand_timeseries",
     ),
+     "niip": (
+        "niip_doy_percentiles_with_demand",
+    ),
 }
 
 
