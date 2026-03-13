@@ -20,6 +20,7 @@ def _load_eta_from_pickle(pkl_path: Path) -> float:
         return float(obj["eta_eff"])
     raise ValueError("Unsupported parameters.pkl format (expected dict with 'eta_eff').")
 
+
 _eta_loaded: Optional[float] = None
 if path_model_params.exists():
     try:
@@ -30,21 +31,22 @@ if path_model_params.exists():
 # -------------------------------------------------------------------
 # Internal tailwater model
 # -------------------------------------------------------------------
+_TAILWATER_Q_CFS = np.array([0.0, 2000.0, 4000.0, 8000.0, 16000.0, 24000.0, 32000.0, 40000.0], dtype=float)
+_TAILWATER_ELEV_FT = np.array([5711.7, 5712.3, 5712.9, 5714.0, 5716.0, 5718.1, 5720.3, 5721.5], dtype=float)
+
+
 def _create_tailwater_model():
-    data_points = [
-        (0, 5711.7),
-        (2000, 5712.3),
-        (4000, 5712.9),
-        (8000, 5714.0),
-        (16000, 5716.0),
-        (24000, 5718.1),
-        (32000, 5720.3),
-        (40000, 5721.5),
-    ]
-    x, y = zip(*data_points)
-    return interp1d(x, y, kind="linear", fill_value="extrapolate")
+    return interp1d(_TAILWATER_Q_CFS, _TAILWATER_ELEV_FT, kind="linear", fill_value="extrapolate")
+
 
 _tailwater_model = _create_tailwater_model()
+
+
+def _tailwater_ft_scalar(q_cfs: float) -> float:
+    """Fast scalar tailwater interpolation for the env hot path."""
+    q = float(q_cfs)
+    return float(np.interp(q, _TAILWATER_Q_CFS, _TAILWATER_ELEV_FT))
+
 
 # Constants
 _RHO = 1000.0
@@ -53,10 +55,47 @@ _CFS_TO_CMS = 0.0283168
 _FT_TO_M = 0.3048
 _TURBINE_LIMIT_CFS = 1300.0
 _PLANT_CAPACITY_MW = 32.0
+_ENERGY_COEFF_BASE = _RHO * _G * _CFS_TO_CMS * _FT_TO_M * 24.0 / 1e6
+
+
+def _resolve_eta_and_coeff(eta_eff: Optional[float]) -> tuple[float, float]:
+    if eta_eff is None:
+        if _eta_loaded is None:
+            raise RuntimeError("No eta provided and could not load from parameters.pkl.")
+        eta = float(_eta_loaded)
+    else:
+        eta = float(eta_eff)
+    return eta, eta * _ENERGY_COEFF_BASE
+
 
 # -------------------------------------------------------------------
 # Public API
 # -------------------------------------------------------------------
+def navajo_power_generation_scalar(
+    cfs_value: float,
+    elevation_ft: float,
+    eta_eff: Optional[float] = None,
+) -> float:
+    """Fast scalar daily energy production (MWh) for the env hot path."""
+    _, energy_coeff = _resolve_eta_and_coeff(eta_eff)
+
+    q_cfs = float(cfs_value)
+    if q_cfs <= 0.0:
+        return 0.0
+
+    tw_ft = _tailwater_ft_scalar(q_cfs)
+    head_ft = float(elevation_ft) - tw_ft
+    if head_ft <= 0.0:
+        return 0.0
+
+    q_cfs_capped = min(q_cfs, _TURBINE_LIMIT_CFS)
+    energy_mwh = energy_coeff * q_cfs_capped * head_ft
+    plant_capacity_mwh_day = _PLANT_CAPACITY_MW * 24.0
+    if energy_mwh > plant_capacity_mwh_day:
+        return plant_capacity_mwh_day
+    return float(energy_mwh)
+
+
 def navajo_power_generation_model(
     cfs_values: Union[float, Sequence[float]],
     elevation_ft: Union[float, Sequence[float]],
@@ -80,10 +119,14 @@ def navajo_power_generation_model(
     energy_MWh : float or np.ndarray
         Daily energy production in MWh.
     """
-    if eta_eff is None:
-        if _eta_loaded is None:
-            raise RuntimeError("No eta provided and could not load from parameters.pkl.")
-        eta_eff = _eta_loaded
+    if np.isscalar(cfs_values) and np.isscalar(elevation_ft):
+        return navajo_power_generation_scalar(
+            cfs_value=float(cfs_values),
+            elevation_ft=float(elevation_ft),
+            eta_eff=eta_eff,
+        )
+
+    eta_eff, _ = _resolve_eta_and_coeff(eta_eff)
 
     q_cfs = np.asarray(cfs_values, dtype=float)
     elev_ft = np.asarray(elevation_ft, dtype=float)

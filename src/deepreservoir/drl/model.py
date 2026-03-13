@@ -37,7 +37,7 @@ from deepreservoir.drl import rewards as drl_rewards
 from deepreservoir.drl import plotting as drl_plotting
 from deepreservoir.drl import metrics as drl_metrics
 from deepreservoir.drl.environs import NavajoReservoirEnv
-from deepreservoir.define_env.hydropower_model import navajo_power_generation_model
+from deepreservoir.define_env.hydropower_model import navajo_power_generation_scalar
 
 
 # ---------------------------------------------------------------------
@@ -459,7 +459,7 @@ def run_rollout_window(
 
         # Agent internal state before step
         storage_agent_af = float(eval_env.storage_af)
-        elev_agent_ft = float(eval_env.capacity_to_elev(storage_agent_af))
+        elev_agent_ft = float(eval_env._capacity_to_elev_scalar(storage_agent_af)) if hasattr(eval_env, "_capacity_to_elev_scalar") else float(eval_env.capacity_to_elev(storage_agent_af))
 
         # Step
         action, _ = agent.predict(obs, deterministic=True)
@@ -511,8 +511,8 @@ def run_rollout_window(
 
         # Hydropower: agent generation (MWh/day), using San Juan mainstem release + agent elevation
         if "release_sj_main_cfs" in rec:
-            hp_agent = navajo_power_generation_model(
-                cfs_values=float(rec["release_sj_main_cfs"]),
+            hp_agent = navajo_power_generation_scalar(
+                cfs_value=float(rec["release_sj_main_cfs"]),
                 elevation_ft=elev_agent_ft,
             )
             rec["hydro_agent_mwh"] = float(hp_agent)
@@ -520,9 +520,9 @@ def run_rollout_window(
 
         # Historic hydropower: use historic total release + elevation from historic storage
         if "storage_hist_af" in rec and "release_cfs" in rec:
-            elev_hist_ft = float(eval_env.capacity_to_elev(rec["storage_hist_af"]))
-            hp_hist = navajo_power_generation_model(
-                cfs_values=float(rec["release_cfs"]),
+            elev_hist_ft = float(eval_env._capacity_to_elev_scalar(rec["storage_hist_af"])) if hasattr(eval_env, "_capacity_to_elev_scalar") else float(eval_env.capacity_to_elev(rec["storage_hist_af"]))
+            hp_hist = navajo_power_generation_scalar(
+                cfs_value=float(rec["release_cfs"]),
                 elevation_ft=elev_hist_ft,
             )
             rec["elev_hist_ft"] = elev_hist_ft
