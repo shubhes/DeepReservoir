@@ -24,6 +24,7 @@ from matplotlib.colors import TwoSlopeNorm
 from matplotlib.patches import Patch
 
 from deepreservoir.define_env.spring_peak_release_curve import SpringPeakReleaseCurve
+from deepreservoir.define_env.niip.niip_demand import niip_daily_demand
 
 
 # -----------------------------------------------------------------------------
@@ -978,31 +979,54 @@ def plot_spr_farmington_components_and_demand_timeseries(
 def plot_niip_doy_percentiles_with_demand(
     df: pd.DataFrame,
     *,
-    sanjuan_col: str = "sanjuan_release_cfs",
-    niip_col: str = "niip_release_cfs",
+    sanjuan_col: str = "release_sj_main_cfs",
+    niip_col: str = "release_niip_cfs",
     doy_start: int = 50,
     doy_end: int = 300,
     figsize: tuple[float, float] = (10, 4),
 ) -> tuple[plt.Figure, plt.Axes]:
     """
-    NIIP plot (Colab-style DOY percentiles) with NIIP demand curve:
+    NIIP plot (Colab-style DOY percentiles) with NIIP demand curve.
 
-      - San Juan release (agent component #1): median + IQR by DOY
-      - NIIP release (agent component #2):     median + IQR by DOY
-      - NIIP demand curve (deterministic):     line by DOY
+    Canonical rollout/eval column names in this repo are:
+      - release_sj_main_cfs
+      - release_niip_cfs
+
+    For backward compatibility, this function will also accept the older alias
+    names `sanjuan_release_cfs` and `niip_release_cfs` if the canonical names
+    are not present.
 
     All units are cfs.
 
     Required:
       - df.index is DatetimeIndex
-      - df contains columns: sanjuan_col and niip_col
+      - df contains a San Juan release column and a NIIP release column
     """
     if not isinstance(df.index, pd.DatetimeIndex):
         raise ValueError("df.index must be a DatetimeIndex.")
 
-    missing = [c for c in [sanjuan_col, niip_col] if c not in df.columns]
-    if missing:
-        raise ValueError(f"df is missing required columns for NIIP plot: {missing}")
+    def _resolve_release_col(requested: str, aliases: tuple[str, ...], label: str) -> str:
+        candidates: list[str] = []
+        for c in (requested, *aliases):
+            if c not in candidates:
+                candidates.append(c)
+        for c in candidates:
+            if c in df.columns:
+                return c
+        raise ValueError(
+            f"df is missing required column for {label}. Tried: {candidates}"
+        )
+
+    sanjuan_col_resolved = _resolve_release_col(
+        sanjuan_col,
+        aliases=("sanjuan_release_cfs",),
+        label="San Juan release",
+    )
+    niip_col_resolved = _resolve_release_col(
+        niip_col,
+        aliases=("niip_release_cfs",),
+        label="NIIP release",
+    )
 
     # Compute DOY and restrict to NIIP season
     doy = df.index.dayofyear.astype(int)
@@ -1016,8 +1040,8 @@ def plot_niip_doy_percentiles_with_demand(
     # Tidy frame for groupby quantiles
     tidy = pd.DataFrame({
         "DOY": doy_season.values,
-        "SanJuan": df_season[sanjuan_col].astype(float).values,
-        "NIIP": df_season[niip_col].astype(float).values,
+        "SanJuan": df_season[sanjuan_col_resolved].astype(float).values,
+        "NIIP": df_season[niip_col_resolved].astype(float).values,
     })
 
     def _doy_stats(values: pd.Series) -> pd.DataFrame:
@@ -1033,7 +1057,11 @@ def plot_niip_doy_percentiles_with_demand(
 
     # Demand curve: deterministic by DOY (so "repeats every year" naturally)
     doys = sj_stats.index.values
-    demand = np.array([float(niip_daily_demand(int(d))) for d in doys], dtype=float)
+    try:
+        demand = np.asarray(niip_daily_demand(doys), dtype=float)
+    except Exception:
+        demand = np.array([float(niip_daily_demand(int(d))) for d in doys], dtype=float)
+    demand = np.clip(demand, 0.0, None)
 
     fig, ax = plt.subplots(figsize=figsize)
 

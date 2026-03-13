@@ -45,6 +45,27 @@ class RewardContext:
 RewardFn = Callable[[RewardContext], float]
 
 
+def _animas_farmington_cfs(ctx: RewardContext) -> float:
+    """Return the Animas-at-Farmington flow from the lean scalar field when
+    present, falling back to the legacy raw_forcings container.
+    """
+    if "animas_farmington_q_cfs" in ctx.info:
+        return float(ctx.info.get("animas_farmington_q_cfs", 0.0))
+
+    row = ctx.info.get("raw_forcings", None)
+    if row is None:
+        return 0.0
+
+    getter = getattr(row, "get", None)
+    if getter is None:
+        return 0.0
+
+    try:
+        return float(getter("animas_farmington_q_cfs", 0.0))
+    except Exception:
+        return 0.0
+
+
 # ---------------------------------------------------------------------
 # Registry plumbing
 # ---------------------------------------------------------------------
@@ -328,8 +349,7 @@ def esa_min_flow_baseline(ctx: RewardContext) -> float:
     +1 if (Animas at Farmington + San Juan mainstem release) >= 500 cfs, else 0.
     Uses release_sj_main_cfs as component #1 (regular/mainstem release).
     """
-    row = ctx.info["raw_forcings"]  # pd.Series
-    animas_cfs = float(row["animas_farmington_q_cfs"]) if "animas_farmington_q_cfs" in row.index else 0.0
+    animas_cfs = _animas_farmington_cfs(ctx)
     release_sj_main_cfs = float(ctx.info["release_sj_main_cfs"])
     total_flow_cfs = animas_cfs + release_sj_main_cfs
     return 1.0 if total_flow_cfs >= 500.0 else 0.0
@@ -560,11 +580,7 @@ def esa_spring_peak_farmington_10k(ctx: RewardContext) -> float:
     if target <= 0.0:
         return 0.0
 
-    row = ctx.info.get("raw_forcings", None)
-    if row is None or "animas_farmington_q_cfs" not in row.index:
-        return 0.0
-
-    animas = float(row["animas_farmington_q_cfs"])
+    animas = _animas_farmington_cfs(ctx)
     sanjuan = float(ctx.info.get("release_sj_main_cfs", 0.0))
 
     total = animas + sanjuan
@@ -598,7 +614,7 @@ def spr_farmington_10k_shaped(ctx: RewardContext) -> float:
     if not np.isfinite(oi) or oi <= 0.0:
         return 0.0  # outside SPR window
 
-    animas = float(ctx.info["raw_forcings"].get("animas_farmington_q_cfs", 0.0))
+    animas = _animas_farmington_cfs(ctx)
     sanjuan = float(ctx.info.get("release_sj_main_cfs", 0.0))
     farm = animas + sanjuan
 
