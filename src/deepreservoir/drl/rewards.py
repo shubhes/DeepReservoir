@@ -280,7 +280,7 @@ def dam_safety_storage_band(ctx: RewardContext) -> float:
     x = (storage - target) / span
     r = 1.0 - x**2
     r = float(np.clip(r, -1.0, 1.0))
-    return r
+    return 3*r
 
 @register_reward("dam_safety", "storage_band_shaped")
 def dam_safety_storage_band(ctx: RewardContext) -> float:
