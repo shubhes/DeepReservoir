@@ -463,6 +463,7 @@ def run_rollout_window(
 
         # Step
         action, _ = agent.predict(obs, deterministic=True)
+        action_arr = np.asarray(action, dtype=float).reshape(-1)
         next_obs, reward, terminated, truncated, info_step = eval_env.step(action)
         done = bool(terminated or truncated)
 
@@ -473,19 +474,66 @@ def run_rollout_window(
             "storage_agent_af": storage_agent_af,
             "elev_agent_ft": elev_agent_ft,
         }
+        for i, val in enumerate(action_arr.tolist()):
+            rec[f"action_{i}"] = float(val)
 
         # Reward components
         comps = info_step.get("reward_components", {})
         for k, v in comps.items():
             rec[f"rc_{k}"] = float(v)
 
-        # Component releases (use env’s native keys)
-        if "release_sj_main_cfs" in info_step:
-            rec["release_sj_main_cfs"] = float(info_step["release_sj_main_cfs"])
-        if "release_niip_cfs" in info_step:
-            rec["release_niip_cfs"] = float(info_step["release_niip_cfs"])
+        # State after step / operational diagnostics
+        if "storage_af" in info_step:
+            rec["storage_agent_af_end"] = float(info_step["storage_af"])
+        if "elev_ft" in info_step:
+            rec["elev_agent_ft_end"] = float(info_step["elev_ft"])
+        elif "storage_agent_af_end" in rec:
+            rec["elev_agent_ft_end"] = (
+                float(eval_env._capacity_to_elev_scalar(rec["storage_agent_af_end"]))
+                if hasattr(eval_env, "_capacity_to_elev_scalar")
+                else float(eval_env.capacity_to_elev(rec["storage_agent_af_end"]))
+            )
+
+        # Component releases and operational fields (use env's native keys where possible)
+        passthrough_keys = [
+            "release_sj_main_cfs",
+            "release_niip_cfs",
+            "sj_main_flow_cfs",
+            "spill_cfs",
+            "spill_af",
+            "deadpool_block",
+            "release_cap_penalty",
+            "release_phys_penalty",
+            "available_af",
+            "total_release_af",
+            "total_controlled_release_af",
+            "prev_elev_ft",
+            "deadpool_elev_ft",
+            "spill_elev_ft",
+        ]
+        for key in passthrough_keys:
+            if key in info_step:
+                rec[key] = float(info_step[key]) if key != "deadpool_block" else int(bool(info_step[key]))
+
+        if "deadpool_storage_af" in info_step:
+            rec["deadpool_storage_af"] = float(info_step["deadpool_storage_af"])
+            rec.setdefault("min_storage_af", float(info_step["deadpool_storage_af"]))
+        if "max_storage_af" in info_step:
+            rec["max_storage_af"] = float(info_step["max_storage_af"])
+
         if "total_release_cfs" in info_step:
             rec["release_agent_cfs"] = float(info_step["total_release_cfs"])
+        if "total_controlled_release_cfs" in info_step:
+            rec["release_agent_controlled_cfs"] = float(info_step["total_controlled_release_cfs"])
+
+        req_sj = info_step.get("requested_release_sj_main_cfs")
+        req_niip = info_step.get("requested_release_niip_cfs")
+        if req_sj is not None:
+            rec["requested_release_sj_main_cfs"] = float(req_sj)
+        if req_niip is not None:
+            rec["requested_release_niip_cfs"] = float(req_niip)
+        if req_sj is not None or req_niip is not None:
+            rec["requested_total_release_cfs"] = float((req_sj or 0.0) + (req_niip or 0.0))
 
         # Historic row
         date_row = eval_env.data_raw.loc[rec["date"]]
@@ -509,14 +557,16 @@ def run_rollout_window(
         if "evap_af" in rec and "evap_cfs" not in rec:
             rec["evap_cfs"] = float(rec["evap_af"]) * (43560.0 / 86400.0)
 
-        # Hydropower: agent generation (MWh/day), using San Juan mainstem release + agent elevation
-        if "release_sj_main_cfs" in rec:
+        # Hydropower: prefer the env-computed value (controlled SJ release + end-of-step elevation)
+        if "hydropower_mwh" in info_step:
+            rec["hydro_agent_mwh"] = float(info_step["hydropower_mwh"])
+        elif "release_sj_main_cfs" in rec:
+            elev_for_hp = float(rec.get("elev_agent_ft_end", elev_agent_ft))
             hp_agent = navajo_power_generation_scalar(
                 cfs_value=float(rec["release_sj_main_cfs"]),
-                elevation_ft=elev_agent_ft,
+                elevation_ft=elev_for_hp,
             )
             rec["hydro_agent_mwh"] = float(hp_agent)
-
 
         # Historic hydropower: use historic total release + elevation from historic storage
         if "storage_hist_af" in rec and "release_cfs" in rec:

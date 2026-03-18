@@ -53,6 +53,20 @@ METRIC_DEFINITIONS: dict[str, str] = {
     "total_reward": "Sum of per-timestep total reward over the test rollout (unitless).",
     "mean_reward": "Mean per-timestep total reward over the test rollout (unitless).",
 
+    # --- Diagnostic / operations ---
+    "frac_action_0_saturated": "Fraction of days action_0 is near a bound (|action_0| >= saturation threshold; default 0.99).",
+    "frac_action_1_saturated": "Fraction of days action_1 is near a bound (|action_1| >= saturation threshold; default 0.99).",
+    "frac_any_action_saturated": "Fraction of days any action dimension is near a bound (default threshold 0.99).",
+    "frac_release_capped_or_limited": "Fraction of days requested controlled release exceeds actual controlled release.",
+    "frac_release_cap_penalty_pos": "Fraction of days outlet-cap clipping was active.",
+    "mean_release_cap_penalty": "Mean outlet-cap clipping penalty over the rollout.",
+    "frac_release_phys_penalty_pos": "Fraction of days physical water-availability limiting was active.",
+    "mean_release_phys_penalty": "Mean physical water-availability penalty over the rollout.",
+    "frac_days_deadpool_blocked": "Fraction of days releases were blocked because the reservoir started the step at or below deadpool elevation.",
+    "frac_days_spilling": "Fraction of days uncontrolled spill occurred.",
+    "total_spill_af": "Total uncontrolled spill volume over the rollout (acre-feet).",
+    "mean_spill_af_when_spilling": "Mean uncontrolled spill volume on spill days only (acre-feet/day).",
+
     # --- Dam safety (storage) ---
     "dam_safety_frac_days_within_storage_bounds": (
         "Fraction of days storage is within [min_storage_af, max_storage_af]. Uses storage_agent_af_end if "
@@ -361,12 +375,13 @@ def _metric_action_saturation(df: pd.DataFrame, *, sat: float = 0.99) -> dict[st
 
 
 def _metric_release_constraint_binding(df: pd.DataFrame, *, eps: float = 1e-6) -> dict[str, float]:
-    """How often the requested release was capped/limited."""
+    """How often the requested controlled release was capped or physically limited."""
     out: dict[str, float] = {}
 
-    if "requested_total_release_cfs" in df.columns and "release_agent_cfs" in df.columns:
+    actual_col = "release_agent_controlled_cfs" if "release_agent_controlled_cfs" in df.columns else "release_agent_cfs"
+    if "requested_total_release_cfs" in df.columns and actual_col in df.columns:
         req = df["requested_total_release_cfs"].astype(float)
-        act = df["release_agent_cfs"].astype(float)
+        act = df[actual_col].astype(float)
         out["frac_release_capped_or_limited"] = float((req > (act + eps)).mean())
 
     if "release_cap_penalty" in df.columns:
@@ -379,6 +394,21 @@ def _metric_release_constraint_binding(df: pd.DataFrame, *, eps: float = 1e-6) -
     return out
 
 
+def _metric_operational_diagnostics(df: pd.DataFrame) -> dict[str, float]:
+    """Compact operational diagnostics kept out of the default scoreboard."""
+    out: dict[str, float] = {}
+
+    if "deadpool_block" in df.columns:
+        out["frac_days_deadpool_blocked"] = float(df["deadpool_block"].astype(bool).mean())
+    if "spill_af" in df.columns:
+        spill = df["spill_af"].astype(float)
+        spilling = spill > 0.0
+        out["frac_days_spilling"] = float(spilling.mean())
+        out["total_spill_af"] = float(spill.sum())
+        out["mean_spill_af_when_spilling"] = float(spill[spilling].mean()) if bool(spilling.any()) else 0.0
+
+    return out
+
 def _objective_is_active(df: pd.DataFrame, objective: str) -> bool:
     """Return True if the rollout includes reward-component columns for an objective.
 
@@ -387,6 +417,17 @@ def _objective_is_active(df: pd.DataFrame, objective: str) -> bool:
     """
     prefix = f"rc_{objective}."
     return any(str(c).startswith(prefix) for c in df.columns)
+
+
+def _first_present_scalar(df: pd.DataFrame, *cols: str) -> float | None:
+    """Return the first scalar value found among candidate columns."""
+    for col in cols:
+        if col in df.columns:
+            try:
+                return float(df[col].iloc[0])
+            except Exception:
+                continue
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -422,20 +463,12 @@ def _metric_dam_safety_frac_days_within_storage_bounds(
     s = df[col].astype(float)
 
     if low_af is None:
-        if "min_storage_af" in df.columns:
-            try:
-                low_af = float(df["min_storage_af"].iloc[0])
-            except Exception:
-                low_af = None
+        low_af = _first_present_scalar(df, "min_storage_af", "deadpool_storage_af")
         if low_af is None:
             low_af = 500_000.0
 
     if high_af is None:
-        if "max_storage_af" in df.columns:
-            try:
-                high_af = float(df["max_storage_af"].iloc[0])
-            except Exception:
-                high_af = None
+        high_af = _first_present_scalar(df, "max_storage_af")
         if high_af is None:
             high_af = 1_731_750.0
 
@@ -470,16 +503,10 @@ def _metric_dam_safety_storage_detail(
 
     s = df[col].astype(float)
 
-    if low_af is None and "min_storage_af" in df.columns:
-        try:
-            low_af = float(df["min_storage_af"].iloc[0])
-        except Exception:
-            low_af = None
-    if high_af is None and "max_storage_af" in df.columns:
-        try:
-            high_af = float(df["max_storage_af"].iloc[0])
-        except Exception:
-            high_af = None
+    if low_af is None:
+        low_af = _first_present_scalar(df, "min_storage_af", "deadpool_storage_af")
+    if high_af is None:
+        high_af = _first_present_scalar(df, "max_storage_af")
 
     if low_af is None:
         low_af = 500_000.0
@@ -735,6 +762,29 @@ def _max_consecutive_true(b: pd.Series) -> int:
     return int(b.groupby(grp).sum().max())
 
 
+def _metric_spring_peak_release_scoreboard(
+    df: pd.DataFrame,
+    *,
+    curve_tolerance_cfs: float = 500.0,
+    threshold_specs: Sequence[tuple[float, int, float]] = _SPR_THRESHOLD_SPECS,
+) -> dict[str, float]:
+    """Compact SPR scoreboard: one curve metric plus the four threshold frequencies."""
+    detail = _metric_spring_peak_release(
+        df,
+        curve_tolerance_cfs=curve_tolerance_cfs,
+        threshold_specs=threshold_specs,
+    )
+    out = {
+        "spr_curve_mean_abs_error_cfs": float(detail.get("spr_curve_mean_abs_error_cfs", float("nan"))),
+        "spr_curve_frac_days_within_500cfs": float(detail.get("spr_curve_frac_days_within_500cfs", float("nan"))),
+    }
+    for thr, dur, _ in threshold_specs:
+        out[f"spr_freq_years_meeting_{int(thr)}cfs_{int(dur)}d"] = float(
+            detail.get(f"spr_freq_years_meeting_{int(thr)}cfs_{int(dur)}d", float("nan"))
+        )
+    return out
+
+
 def _metric_spring_peak_release(
     df: pd.DataFrame,
     *,
@@ -847,27 +897,28 @@ METRIC_REGISTRY: dict[str, MetricSpec] = {
     "rewards_summary": MetricSpec(func=_metric_rewards_summary, requires=("reward",)),
     "reward_components_summary": MetricSpec(func=_metric_reward_components_summary, requires=()),
 
-    # Objective-aligned summary metrics
+    # Objective-aligned scoreboard metrics
     "dam_safety": MetricSpec(func=_metric_dam_safety_frac_days_within_storage_bounds, requires=()),
     "esa_min_flow": MetricSpec(func=_metric_esa_min_flow_frac_days_met, requires=()),
     "flooding": MetricSpec(func=_metric_flooding_frac_days_met, requires=()),
-    "spring_peak_release": MetricSpec(func=_metric_spring_peak_release, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
+    "spring_peak_release": MetricSpec(func=_metric_spring_peak_release_scoreboard, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
+    "spring_peak_release_detail": MetricSpec(func=_metric_spring_peak_release, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
     "hydropower": MetricSpec(func=_metric_hydropower_frac_of_historic, requires=()),
     "niip": MetricSpec(func=_metric_niip_delivery_and_volume, requires=()),
 
     # Optional extra objective diagnostics
     "dam_safety_detail": MetricSpec(func=_metric_dam_safety_storage_detail, requires=()),
 
-    # Actions / constraints (diagnostic)
+    # Actions / operations (diagnostic)
     "action_saturation": MetricSpec(func=_metric_action_saturation, requires=()),
     "release_constraint_binding": MetricSpec(func=_metric_release_constraint_binding, requires=()),
+    "operational_diagnostics": MetricSpec(func=_metric_operational_diagnostics, requires=()),
 }
 
 
 METRIC_GROUPS: dict[str, tuple[str, ...]] = {
-    # Minimal experiment scoreboard: one metric per objective (+ total/mean reward).
+    # Compact experiment scoreboard: objective-aligned comparison metrics only.
     "core": (
-        "rewards_summary",
         "dam_safety",
         "esa_min_flow",
         "flooding",
@@ -879,5 +930,7 @@ METRIC_GROUPS: dict[str, tuple[str, ...]] = {
     "objectives": ("dam_safety", "esa_min_flow", "flooding", "spring_peak_release", "hydropower", "niip"),
     "dam_safety_detail": ("dam_safety_detail",),
     "actions": ("action_saturation", "release_constraint_binding"),
-    "spr": ("spring_peak_release",),
+    "diagnostics": ("dam_safety_detail", "action_saturation", "release_constraint_binding", "operational_diagnostics"),
+    "spr": ("spring_peak_release", "spring_peak_release_detail"),
+    "all": tuple(),
 }
