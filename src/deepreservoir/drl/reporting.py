@@ -105,7 +105,7 @@ def build_master_metrics_workbook(
     default_ws = wb.active
     wb.remove(default_ws)
 
-    summary_df, full_df, index_df = _records_to_dataframes(records)
+    summary_df, full_df, index_df, config_eval_df, config_overall_df = _records_to_dataframes(records)
     present_metrics = [c for c in full_df.columns if c not in _ID_COLUMNS]
     specs = {name: get_metric_display_spec(name) for name in present_metrics}
 
@@ -114,7 +114,7 @@ def build_master_metrics_workbook(
         sheet_name="Summary",
         df=summary_df,
         specs={name: specs[name] for name in summary_df.columns if name not in _ID_COLUMNS},
-        title="DeepReservoir metrics summary",
+        title="DeepReservoir core metrics summary",
         subtitle=f"Built from {len(records)} evaluation result(s) under {runs_root}",
     )
     _write_dashboard_sheet(
@@ -124,6 +124,27 @@ def build_master_metrics_workbook(
         specs=specs,
         title="DeepReservoir full metrics dashboard",
         subtitle=f"Built from {len(records)} evaluation result(s) under {runs_root}",
+    )
+    config_eval_specs = _build_rollup_specs(config_eval_df)
+    config_overall_specs = _build_rollup_specs(config_overall_df)
+
+    _write_dashboard_sheet(
+        wb=wb,
+        sheet_name="Config by Eval",
+        df=config_eval_df,
+        specs=config_eval_specs,
+        title="DeepReservoir config rollup by eval window",
+        subtitle="One row per config + eval; metrics are aggregated across repeated seed runs.",
+        id_columns=_CONFIG_EVAL_ID_COLUMNS,
+    )
+    _write_dashboard_sheet(
+        wb=wb,
+        sheet_name="Config Overall",
+        df=config_overall_df,
+        specs=config_overall_specs,
+        title="DeepReservoir config rollup across all evals",
+        subtitle="One row per config; metrics are aggregated across all available eval windows and repeated seed runs.",
+        id_columns=_CONFIG_OVERALL_ID_COLUMNS,
     )
     _write_run_index_sheet(wb=wb, df=index_df)
     _write_definitions_sheet(wb=wb, metric_names=present_metrics, specs=specs)
@@ -152,23 +173,28 @@ def discover_eval_metrics(
 
     experiment_counts: dict[str, int] = {}
     rel_paths: dict[Path, Path] = {}
+    manifest_paths: dict[Path, Path | None] = {}
+    experiment_names: dict[Path, str] = {}
     for path in paths:
         rel = path.relative_to(runs_root)
         rel_paths[path] = rel
-        experiment = rel.parts[0] if len(rel.parts) >= 1 else path.parent.name
+        manifest_path = _find_manifest_path(runs_root=runs_root, metrics_path=path)
+        manifest_paths[path] = manifest_path
+        experiment = _experiment_name_from_paths(runs_root=runs_root, rel_metrics_path=rel, manifest_path=manifest_path)
+        experiment_names[path] = experiment
         experiment_counts[experiment] = experiment_counts.get(experiment, 0) + 1
 
     records: list[EvalMetricsRecord] = []
     for path in paths:
         rel = rel_paths[path]
-        experiment = rel.parts[0] if len(rel.parts) >= 1 else path.parent.name
+        experiment = experiment_names[path]
         eval_suffix = _relative_eval_label(rel)
         display_name = _build_display_name(
             experiment_name=experiment,
             eval_label=eval_suffix,
             n_evals_for_experiment=experiment_counts.get(experiment, 1),
         )
-        manifest_path = _find_manifest_path(runs_root=runs_root, metrics_path=path)
+        manifest_path = manifest_paths[path]
         metadata = _load_manifest_metadata(manifest_path)
         metrics = _load_metrics_row(path)
         records.append(
@@ -195,17 +221,22 @@ def discover_eval_metrics(
 
 
 _ID_COLUMNS = ["experiment", "eval", "display_name"]
+_CONFIG_EVAL_ID_COLUMNS = ["config_id", "eval", "config_label"]
+_CONFIG_OVERALL_ID_COLUMNS = ["config_id", "config_label"]
 
+# Keep the Excel "Summary" sheet aligned with the compact experiment scoreboard
+# exposed by metrics group ``core``. This deliberately excludes reward totals and
+# deeper diagnostics so the front page remains a clean cross-run comparison view.
 _SUMMARY_METRICS = (
-    "total_reward",
     "dam_safety_frac_days_within_storage_bounds",
     "esa_min_flow_frac_days_met",
     "flooding_frac_days_met",
+    "spr_curve_mean_abs_error_cfs",
     "spr_curve_frac_days_within_500cfs",
-    "spr_overachievement_10000cfs_5d",
-    "spr_overachievement_8000cfs_19d",
-    "spr_overachievement_5000cfs_20d",
-    "spr_overachievement_2500cfs_10d",
+    "spr_freq_years_meeting_10000cfs_5d",
+    "spr_freq_years_meeting_8000cfs_19d",
+    "spr_freq_years_meeting_5000cfs_20d",
+    "spr_freq_years_meeting_2500cfs_10d",
     "hydropower_frac_of_historic",
     "niip_frac_days_demand_met_in_window",
     "niip_annual_volume_frac_of_contract",
@@ -213,6 +244,7 @@ _SUMMARY_METRICS = (
 
 _GROUP_ORDER = {
     "Run": 0,
+    "Config": 5,
     "Rewards": 10,
     "Dam Safety": 20,
     "ESA / Flow": 30,
@@ -227,8 +259,13 @@ _GROUP_ORDER = {
 }
 
 
-def _records_to_dataframes(records: list[EvalMetricsRecord]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _records_to_dataframes(
+    records: list[EvalMetricsRecord],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     rows: list[dict[str, object]] = []
+    index_rows: list[dict[str, object]] = []
+    rollup_source_rows: list[dict[str, object]] = []
+
     for rec in records:
         row: dict[str, object] = {
             "experiment": rec.experiment_name,
@@ -238,17 +275,6 @@ def _records_to_dataframes(records: list[EvalMetricsRecord]) -> tuple[pd.DataFra
         row.update(rec.metrics)
         rows.append(row)
 
-    df_all = pd.DataFrame(rows)
-    metric_cols = [c for c in df_all.columns if c not in _ID_COLUMNS]
-    ordered_metric_cols = _order_metric_columns(metric_cols)
-    df_all = df_all[_ID_COLUMNS + ordered_metric_cols]
-
-    summary_cols = [c for c in _SUMMARY_METRICS if c in df_all.columns]
-    df_summary = df_all[["experiment", "eval"] + summary_cols].copy()
-    df_full = df_all.copy()
-
-    index_rows: list[dict[str, object]] = []
-    for rec in records:
         idx_row = {
             "experiment": rec.experiment_name,
             "eval": rec.eval_label,
@@ -263,11 +289,51 @@ def _records_to_dataframes(records: list[EvalMetricsRecord]) -> tuple[pd.DataFra
             "train_end": rec.metadata.get("train_end", ""),
             "val_start": rec.metadata.get("val_start", ""),
             "val_end": rec.metadata.get("val_end", ""),
+            "total_timesteps": rec.metadata.get("total_timesteps", ""),
+            "gamma": rec.metadata.get("gamma", ""),
+            "n_steps": rec.metadata.get("n_steps", ""),
+            "batch_size": rec.metadata.get("batch_size", ""),
+            "n_epochs": rec.metadata.get("n_epochs", ""),
+            "algo": rec.metadata.get("algo", ""),
         }
         index_rows.append(idx_row)
+
+        roll_row: dict[str, object] = {
+            "experiment": rec.experiment_name,
+            "eval": rec.eval_label,
+            "seed": rec.metadata.get("seed", ""),
+            "reward_spec": rec.metadata.get("reward_spec", ""),
+            "train_start": rec.metadata.get("train_start", ""),
+            "train_end": rec.metadata.get("train_end", ""),
+            "val_start": rec.metadata.get("val_start", ""),
+            "val_end": rec.metadata.get("val_end", ""),
+            "total_timesteps": rec.metadata.get("total_timesteps", ""),
+            "gamma": rec.metadata.get("gamma", ""),
+            "n_steps": rec.metadata.get("n_steps", ""),
+            "batch_size": rec.metadata.get("batch_size", ""),
+            "n_epochs": rec.metadata.get("n_epochs", ""),
+            "algo": rec.metadata.get("algo", ""),
+            "episode_length_train": rec.metadata.get("episode_length_train", ""),
+            "n_envs": rec.metadata.get("n_envs", ""),
+            "val_freq": rec.metadata.get("val_freq", ""),
+        }
+        for metric_name in _SUMMARY_METRICS:
+            roll_row[metric_name] = rec.metrics.get(metric_name, float("nan"))
+        rollup_source_rows.append(roll_row)
+
+    df_all = pd.DataFrame(rows)
+    metric_cols = [c for c in df_all.columns if c not in _ID_COLUMNS]
+    ordered_metric_cols = _order_metric_columns(metric_cols)
+    df_all = df_all[_ID_COLUMNS + ordered_metric_cols]
+
+    summary_cols = [c for c in _SUMMARY_METRICS if c in df_all.columns]
+    df_summary = df_all[["experiment", "eval"] + summary_cols].copy()
+    df_full = df_all.copy()
     df_index = pd.DataFrame(index_rows)
 
-    return df_summary, df_full, df_index
+    config_eval_df, config_overall_df = _build_config_rollup_tables(pd.DataFrame(rollup_source_rows))
+
+    return df_summary, df_full, df_index, config_eval_df, config_overall_df
 
 
 # -----------------------------------------------------------------------------
@@ -555,6 +621,226 @@ def get_metric_display_spec(raw_name: str) -> MetricDisplaySpec:
     )
 
 
+_ROLLUP_METADATA_SPECS: dict[str, MetricDisplaySpec] = {
+    "reward_spec": MetricDisplaySpec("reward_spec", "Reward spec", "Config", 10, False, True, "@", "none"),
+    "train_start": MetricDisplaySpec("train_start", "Train start", "Config", 20, False, True, "@", "none"),
+    "train_end": MetricDisplaySpec("train_end", "Train end", "Config", 30, False, True, "@", "none"),
+    "val_start": MetricDisplaySpec("val_start", "Val start", "Config", 40, False, True, "@", "none"),
+    "val_end": MetricDisplaySpec("val_end", "Val end", "Config", 50, False, True, "@", "none"),
+    "total_timesteps": MetricDisplaySpec("total_timesteps", "Timesteps", "Config", 60, False, True, "#,##0", "none"),
+    "gamma": MetricDisplaySpec("gamma", "Gamma", "Config", 70, False, True, "0.000", "none"),
+    "n_steps": MetricDisplaySpec("n_steps", "n_steps", "Config", 80, False, True, "#,##0", "none"),
+    "batch_size": MetricDisplaySpec("batch_size", "Batch size", "Config", 90, False, True, "#,##0", "none"),
+    "n_epochs": MetricDisplaySpec("n_epochs", "n_epochs", "Config", 100, False, True, "#,##0", "none"),
+    "n_runs": MetricDisplaySpec("n_runs", "Runs", "Config", 110, False, True, "0", "none"),
+    "n_seeds": MetricDisplaySpec("n_seeds", "Seeds", "Config", 120, False, True, "0", "none"),
+    "n_experiments": MetricDisplaySpec("n_experiments", "Experiments", "Config", 130, False, True, "0", "none"),
+    "n_evals": MetricDisplaySpec("n_evals", "Eval windows", "Config", 140, False, True, "0", "none"),
+}
+
+
+def _build_rollup_specs(df: pd.DataFrame) -> dict[str, MetricDisplaySpec]:
+    specs: dict[str, MetricDisplaySpec] = {}
+    id_columns = set(_CONFIG_EVAL_ID_COLUMNS) | set(_CONFIG_OVERALL_ID_COLUMNS)
+    for name in df.columns:
+        if name in id_columns:
+            continue
+        if name in _ROLLUP_METADATA_SPECS:
+            specs[name] = _ROLLUP_METADATA_SPECS[name]
+            continue
+        mean_m = re.fullmatch(r"mean__(.+)", name)
+        if mean_m:
+            base = get_metric_display_spec(mean_m.group(1))
+            specs[name] = MetricDisplaySpec(
+                raw_name=name,
+                label=f"μ {base.label}",
+                group=base.group,
+                order=(base.order * 10) + 1,
+                include_summary=False,
+                include_full=True,
+                number_format=base.number_format,
+                color_rule=base.color_rule,
+                description=f"Mean across grouped runs for {base.label}.",
+            )
+            continue
+        std_m = re.fullmatch(r"std__(.+)", name)
+        if std_m:
+            base = get_metric_display_spec(std_m.group(1))
+            specs[name] = MetricDisplaySpec(
+                raw_name=name,
+                label=f"σ {base.label}",
+                group=base.group,
+                order=(base.order * 10) + 2,
+                include_summary=False,
+                include_full=True,
+                number_format=base.number_format,
+                color_rule="lower_good",
+                description=f"Across-run standard deviation for {base.label}.",
+            )
+            continue
+        specs[name] = MetricDisplaySpec(
+            raw_name=name,
+            label=_humanize_metric_name(name),
+            group="Config",
+            order=900,
+            include_summary=False,
+            include_full=True,
+            number_format=_guess_number_format(name),
+            color_rule="none",
+            description="",
+        )
+    return specs
+
+
+def _first_non_empty(values: Iterable[object]) -> object:
+    for val in values:
+        if pd.isna(val):
+            continue
+        sval = str(val).strip()
+        if sval and sval.lower() not in {"nan", "none"}:
+            return val
+    return ""
+
+
+def _count_unique_non_empty(values: Iterable[object]) -> int:
+    cleaned = {
+        str(v).strip()
+        for v in values
+        if not pd.isna(v) and str(v).strip() and str(v).strip().lower() not in {"nan", "none"}
+    }
+    return int(len(cleaned))
+
+
+def _config_label_from_experiments(values: Iterable[object]) -> str:
+    cleaned = [
+        str(v).strip()
+        for v in values
+        if not pd.isna(v) and str(v).strip() and str(v).strip().lower() not in {"nan", "none"}
+    ]
+    if not cleaned:
+        return ""
+    stripped = [re.sub(r"(?:[_\-]+)?seed[_\-]*\d+$", "", name, flags=re.IGNORECASE).rstrip("_- ") for name in cleaned]
+    unique = sorted({name or orig for name, orig in zip(stripped, cleaned)})
+    if len(unique) == 1:
+        return unique[0]
+    return unique[0]
+
+
+def _std0(values: pd.Series) -> float:
+    vals = pd.to_numeric(values, errors="coerce").dropna()
+    if vals.empty:
+        return float("nan")
+    return float(vals.std(ddof=0))
+
+
+def _make_config_signature(row: pd.Series) -> str:
+    payload = {
+        "algo": row.get("algo", ""),
+        "reward_spec": row.get("reward_spec", ""),
+        "train_start": row.get("train_start", ""),
+        "train_end": row.get("train_end", ""),
+        "val_start": row.get("val_start", ""),
+        "val_end": row.get("val_end", ""),
+        "total_timesteps": row.get("total_timesteps", ""),
+        "gamma": row.get("gamma", ""),
+        "n_steps": row.get("n_steps", ""),
+        "batch_size": row.get("batch_size", ""),
+        "n_epochs": row.get("n_epochs", ""),
+        "episode_length_train": row.get("episode_length_train", ""),
+        "n_envs": row.get("n_envs", ""),
+        "val_freq": row.get("val_freq", ""),
+    }
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+_ROLLUP_META_COLS = [
+    "reward_spec",
+    "train_start",
+    "train_end",
+    "val_start",
+    "val_end",
+    "total_timesteps",
+    "gamma",
+    "n_steps",
+    "batch_size",
+    "n_epochs",
+]
+
+
+def _build_config_rollup_tables(source_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    metric_cols = [c for c in _SUMMARY_METRICS if c in source_df.columns]
+    if source_df.empty:
+        return pd.DataFrame(columns=_CONFIG_EVAL_ID_COLUMNS), pd.DataFrame(columns=_CONFIG_OVERALL_ID_COLUMNS)
+
+    work = source_df.copy()
+    work["config_signature"] = work.apply(_make_config_signature, axis=1)
+
+    config_meta = (
+        work.groupby("config_signature", dropna=False)
+        .agg(
+            config_label=("experiment", _config_label_from_experiments),
+            reward_spec=("reward_spec", _first_non_empty),
+            train_start=("train_start", _first_non_empty),
+            train_end=("train_end", _first_non_empty),
+            val_start=("val_start", _first_non_empty),
+            val_end=("val_end", _first_non_empty),
+            total_timesteps=("total_timesteps", _first_non_empty),
+            gamma=("gamma", _first_non_empty),
+            n_steps=("n_steps", _first_non_empty),
+            batch_size=("batch_size", _first_non_empty),
+            n_epochs=("n_epochs", _first_non_empty),
+        )
+        .reset_index()
+        .sort_values(by=["reward_spec", "train_start", "train_end", "val_start", "val_end", "total_timesteps", "gamma", "n_steps", "batch_size", "n_epochs", "config_label"], kind="stable")
+        .reset_index(drop=True)
+    )
+    config_meta["config_id"] = [f"cfg_{i:03d}" for i in range(1, len(config_meta) + 1)]
+
+    work = work.merge(config_meta[["config_signature", "config_id", "config_label"]], on="config_signature", how="left")
+
+    named_aggs_overall: dict[str, tuple[str, object]] = {
+        "config_label": ("config_label", _first_non_empty),
+        "n_runs": ("experiment", "size"),
+        "n_seeds": ("seed", _count_unique_non_empty),
+        "n_experiments": ("experiment", _count_unique_non_empty),
+        "n_evals": ("eval", _count_unique_non_empty),
+    }
+    named_aggs_by_eval: dict[str, tuple[str, object]] = {
+        "config_label": ("config_label", _first_non_empty),
+        "n_runs": ("experiment", "size"),
+        "n_seeds": ("seed", _count_unique_non_empty),
+        "n_experiments": ("experiment", _count_unique_non_empty),
+    }
+    for col in _ROLLUP_META_COLS:
+        named_aggs_overall[col] = (col, _first_non_empty)
+        named_aggs_by_eval[col] = (col, _first_non_empty)
+    for metric in metric_cols:
+        named_aggs_overall[f"mean__{metric}"] = (metric, "mean")
+        named_aggs_overall[f"std__{metric}"] = (metric, _std0)
+        named_aggs_by_eval[f"mean__{metric}"] = (metric, "mean")
+        named_aggs_by_eval[f"std__{metric}"] = (metric, _std0)
+
+    overall = (
+        work.groupby(["config_id", "config_signature"], dropna=False)
+        .agg(**named_aggs_overall)
+        .reset_index()
+        .drop(columns=["config_signature"])
+    )
+    by_eval = (
+        work.groupby(["config_id", "config_signature", "eval"], dropna=False)
+        .agg(**named_aggs_by_eval)
+        .reset_index()
+        .drop(columns=["config_signature"])
+    )
+
+    overall_cols = _CONFIG_OVERALL_ID_COLUMNS + _ROLLUP_META_COLS + ["n_runs", "n_seeds", "n_experiments", "n_evals"]
+    by_eval_cols = _CONFIG_EVAL_ID_COLUMNS + _ROLLUP_META_COLS + ["n_runs", "n_seeds", "n_experiments"]
+    metric_rollup_cols = [item for metric in metric_cols for item in (f"mean__{metric}", f"std__{metric}")]
+    overall = overall[overall_cols + metric_rollup_cols]
+    by_eval = by_eval[by_eval_cols + metric_rollup_cols]
+    return by_eval, overall
+
+
 # -----------------------------------------------------------------------------
 # Workbook writing
 # -----------------------------------------------------------------------------
@@ -572,6 +858,7 @@ _NEUTRAL_FILL = PatternFill(fill_type="solid", fgColor="FFFFFF")
 _ID_FILL = PatternFill(fill_type="solid", fgColor="F7F7F7")
 _GROUP_FILLS = {
     "Run": "2F5597",
+    "Config": "3D85C6",
     "Rewards": "7F6000",
     "Dam Safety": "5B9BD5",
     "ESA / Flow": "70AD47",
@@ -594,9 +881,12 @@ def _write_dashboard_sheet(
     specs: dict[str, MetricDisplaySpec],
     title: str,
     subtitle: str,
+    id_columns: Iterable[str] | None = None,
 ) -> None:
     ws = wb.create_sheet(sheet_name)
     ws.sheet_view.showGridLines = False
+    id_columns = list(id_columns or _ID_COLUMNS)
+    id_column_set = set(id_columns)
 
     # Title block
     ws["A1"] = title
@@ -605,7 +895,7 @@ def _write_dashboard_sheet(
     ws["A2"].font = _SUBTITLE_FONT
 
     ordered_cols = list(df.columns)
-    groups = _dashboard_group_sequence(ordered_cols, specs)
+    groups = _dashboard_group_sequence(ordered_cols, specs, id_columns=id_columns)
 
     header_row_1 = 4
     header_row_2 = 5
@@ -622,10 +912,11 @@ def _write_dashboard_sheet(
         c.alignment = Alignment(horizontal="center", vertical="center")
 
     # Column header row
+    id_column_set = set(id_columns or _ID_COLUMNS)
     for col_idx, name in enumerate(ordered_cols, start=1):
-        label = name if name in _ID_COLUMNS else specs[name].label
+        label = name if name in id_column_set else specs[name].label
         cell = ws.cell(row=header_row_2, column=col_idx, value=label)
-        group = "Run" if name in _ID_COLUMNS else specs[name].group
+        group = "Run" if name in id_column_set else specs[name].group
         cell.fill = PatternFill(fill_type="solid", fgColor=_GROUP_FILLS.get(group, "595959"))
         cell.font = _SUBHEADER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -640,16 +931,16 @@ def _write_dashboard_sheet(
                 cell.value = None
             else:
                 cell.value = val.item() if hasattr(val, "item") else val
-            cell.alignment = Alignment(horizontal=("left" if name in _ID_COLUMNS else "center"), vertical="center")
+            cell.alignment = Alignment(horizontal=("left" if name in id_column_set else "center"), vertical="center")
             cell.border = _BORDER
-            if name in _ID_COLUMNS:
+            if name in id_column_set:
                 cell.fill = _ID_FILL
             else:
                 cell.number_format = specs[name].number_format
 
     # Color metric cells after values are written.
     for name in ordered_cols:
-        if name in _ID_COLUMNS:
+        if name in id_column_set:
             continue
         col_idx = ordered_cols.index(name) + 1
         col_values = pd.to_numeric(df[name], errors="coerce")
@@ -657,11 +948,12 @@ def _write_dashboard_sheet(
         for i, fill in enumerate(fills, start=data_start_row):
             ws.cell(row=i, column=col_idx).fill = fill
 
-    ws.freeze_panes = "C6" if len(ordered_cols) >= 2 else "A6"
+    freeze_col = get_column_letter(min(len(ordered_cols) + 1, len(id_columns) + 1)) if ordered_cols else "A"
+    ws.freeze_panes = f"{freeze_col}{data_start_row}"
     ws.auto_filter.ref = f"A{header_row_2}:{get_column_letter(len(ordered_cols))}{max(data_start_row, ws.max_row)}"
     ws.row_dimensions[header_row_1].height = 22
     ws.row_dimensions[header_row_2].height = 34
-    _set_column_widths(ws, ordered_cols, specs)
+    _set_column_widths(ws, ordered_cols, specs, id_columns=id_columns)
 
 
 
@@ -758,6 +1050,18 @@ def _load_metrics_row(path: Path) -> dict[str, float]:
 
 
 
+
+
+def _experiment_name_from_paths(*, runs_root: Path, rel_metrics_path: Path, manifest_path: Path | None) -> str:
+    if manifest_path is not None:
+        try:
+            rel_run = manifest_path.parent.relative_to(runs_root)
+            if len(rel_run.parts) >= 1:
+                return "/".join(rel_run.parts)
+        except Exception:
+            pass
+    return rel_metrics_path.parts[0] if len(rel_metrics_path.parts) >= 1 else rel_metrics_path.parent.name
+
 def _find_manifest_path(*, runs_root: Path, metrics_path: Path) -> Path | None:
     rel = metrics_path.relative_to(runs_root)
     if len(rel.parts) == 0:
@@ -790,13 +1094,26 @@ def _load_manifest_metadata(manifest_path: Path | None) -> dict[str, object]:
     train = cfg.get("train", {}) if isinstance(cfg.get("train"), dict) else {}
     val = cfg.get("val", {}) if isinstance(cfg.get("val"), dict) else {}
 
+    train_invocations = data.get("train_invocations", []) if isinstance(data, dict) else []
+    last_inv = train_invocations[-1] if train_invocations else {}
+    ppo_args = last_inv.get("ppo_args", {}) if isinstance(last_inv, dict) else {}
+
     return {
         "reward_spec": cfg.get("reward_spec", ""),
         "seed": cfg.get("seed", ""),
+        "algo": cfg.get("algo", ""),
+        "gamma": cfg.get("gamma", ""),
+        "n_envs": cfg.get("n_envs", ""),
+        "episode_length_train": cfg.get("episode_length_train", ""),
         "train_start": train.get("train_start", ""),
         "train_end": train.get("train_end", ""),
         "val_start": val.get("val_start", ""),
         "val_end": val.get("val_end", ""),
+        "total_timesteps": last_inv.get("requested_total_timesteps", ""),
+        "val_freq": last_inv.get("val_freq", ""),
+        "n_steps": ppo_args.get("n_steps", ""),
+        "batch_size": ppo_args.get("batch_size", ""),
+        "n_epochs": ppo_args.get("n_epochs", ""),
     }
 
 
@@ -839,12 +1156,15 @@ def _order_metric_columns(metric_names: list[str]) -> list[str]:
 def _dashboard_group_sequence(
     ordered_cols: list[str],
     specs: dict[str, MetricDisplaySpec],
+    *,
+    id_columns: Iterable[str] | None = None,
 ) -> list[tuple[str, int, int]]:
     groups: list[tuple[str, int, int]] = []
+    id_column_set = set(id_columns or _ID_COLUMNS)
     current_group = None
     start_idx = 1
     for idx, name in enumerate(ordered_cols, start=1):
-        group = "Run" if name in _ID_COLUMNS else specs[name].group
+        group = "Run" if name in id_column_set else specs[name].group
         if current_group is None:
             current_group = group
             start_idx = idx
@@ -967,7 +1287,14 @@ def _stable_order_key(text: str) -> int:
 # -----------------------------------------------------------------------------
 
 
-def _set_column_widths(ws, ordered_cols: list[str], specs: dict[str, MetricDisplaySpec]) -> None:
+def _set_column_widths(
+    ws,
+    ordered_cols: list[str],
+    specs: dict[str, MetricDisplaySpec],
+    *,
+    id_columns: Iterable[str] | None = None,
+) -> None:
+    id_column_set = set(id_columns or _ID_COLUMNS)
     for col_idx, name in enumerate(ordered_cols, start=1):
         if name == "experiment":
             width = 24
@@ -975,7 +1302,19 @@ def _set_column_widths(ws, ordered_cols: list[str], specs: dict[str, MetricDispl
             width = 20
         elif name == "display_name":
             width = 32
-        elif name in _ID_COLUMNS:
+        elif name == "config_id":
+            width = 10
+        elif name == "config_label":
+            width = 24
+        elif name == "reward_spec":
+            width = 44
+        elif name in {"train_start", "train_end", "val_start", "val_end"}:
+            width = 12
+        elif name in {"total_timesteps", "n_steps", "batch_size", "n_epochs", "n_runs", "n_seeds", "n_experiments", "n_evals"}:
+            width = 12
+        elif name == "gamma":
+            width = 10
+        elif name in id_column_set:
             width = 22
         else:
             width = max(12, min(18, len(specs[name].label) + 2))

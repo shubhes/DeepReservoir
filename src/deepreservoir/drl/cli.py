@@ -33,9 +33,11 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
+import os
 
 from deepreservoir.drl import model
 from deepreservoir.drl import helpers
+from deepreservoir.drl import sweeps
 
 
 _DEFAULT_RUNS_ROOT = Path(__file__).resolve().parents[3] / "runs"
@@ -293,8 +295,73 @@ def build_parser() -> argparse.ArgumentParser:
         help="Metrics filename to scan for recursively.",
     )
 
+
+    # ------------------------------------------------------------------
+    # plan-sweep
+    # ------------------------------------------------------------------
+    p_plan = sub.add_parser(
+        "plan-sweep",
+        help="Expand a JSON sweep spec into a task plan plus SLURM helper scripts",
+    )
+    p_plan.add_argument("--spec", type=str, required=True, help="Path to a JSON sweep spec.")
+    p_plan.add_argument(
+        "--outdir",
+        type=str,
+        default=None,
+        help="Control/output directory for generated plan + scripts. Default: <runs_root>/<sweep_name>/_sweep",
+    )
+
+    # ------------------------------------------------------------------
+    # run-sweep-task
+    # ------------------------------------------------------------------
+    p_task = sub.add_parser(
+        "run-sweep-task",
+        help="Run one task from a materialized sweep plan (intended for SLURM arrays)",
+    )
+    p_task.add_argument("--plan", type=str, required=True, help="Path to a plan.json produced by plan-sweep.")
+    p_task.add_argument(
+        "--task-id",
+        type=int,
+        default=None,
+        help="0-based task id. Defaults to SLURM_ARRAY_TASK_ID if unset.",
+    )
+    p_task.add_argument(
+        "--no-skip-complete",
+        action="store_true",
+        help="Force rerun even if the model and eval artifacts already exist.",
+    )
+
     return parser
 
+
+
+
+def cmd_plan_sweep(args) -> None:
+    result = sweeps.materialize_sweep_plan(spec_path=args.spec, outdir=args.outdir)
+    print(
+        "[cli] wrote sweep plan: "
+        f"{result['plan_path']} (tasks={result['n_tasks']}, sweep_root={result['sweep_root']})"
+    )
+    print(f"[cli] SLURM helper dir: {result['control_dir']}")
+
+
+def cmd_run_sweep_task(args) -> None:
+    task_id = args.task_id
+    if task_id is None:
+        env_val = os.environ.get("SLURM_ARRAY_TASK_ID")
+        if env_val is None:
+            raise ValueError("--task-id was not provided and SLURM_ARRAY_TASK_ID is not set.")
+        task_id = int(env_val)
+
+    result = sweeps.run_sweep_task(
+        plan_path=args.plan,
+        task_id=int(task_id),
+        skip_complete=(not args.no_skip_complete),
+    )
+    print(
+        "[cli] completed sweep task: "
+        f"task_id={result['task_id']} status={result['status']} logdir={result['logdir']}"
+    )
 
 def cmd_info(args) -> None:
     all_data = model.load_all_model_data()
@@ -560,6 +627,10 @@ def main(argv=None) -> None:
         cmd_eval(args)
     elif args.cmd == "report-metrics":
         cmd_report_metrics(args)
+    elif args.cmd == "plan-sweep":
+        cmd_plan_sweep(args)
+    elif args.cmd == "run-sweep-task":
+        cmd_run_sweep_task(args)
     else:
         raise RuntimeError(f"Unknown command: {args.cmd}")
 
