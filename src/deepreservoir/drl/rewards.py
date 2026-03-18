@@ -280,7 +280,7 @@ def dam_safety_storage_band(ctx: RewardContext) -> float:
     x = (storage - target) / span
     r = 1.0 - x**2
     r = float(np.clip(r, -1.0, 1.0))
-    return 3*r
+    return r
 
 @register_reward("dam_safety", "storage_band_shaped")
 def dam_safety_storage_band(ctx: RewardContext) -> float:
@@ -481,11 +481,11 @@ def niip_colab_band(ctx: RewardContext) -> float:
     daily_release_af = niip_release_cfs * CFS_TO_AF_PER_DAY
 
     if daily_release_af > (1.05 * daily_demand_af):
-        return -2.5
+        return -0.5
     elif (0.95 * daily_demand_af) <= daily_release_af <= (1.05 * daily_demand_af):
-        return 10.5
+        return 1.5
     else:
-        return -2.5
+        return -0.5
 
 # ---------------- SPR rewards ----------------
 
