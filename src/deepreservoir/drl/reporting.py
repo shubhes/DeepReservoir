@@ -29,7 +29,7 @@ except Exception as exc:  # pragma: no cover - dependency/import guard
         "deepreservoir.drl.reporting requires openpyxl. Install it in the active environment."
     ) from exc
 
-from deepreservoir.drl.metrics import METRIC_DEFINITIONS
+from deepreservoir.drl.metrics import METRIC_DEFINITIONS, compute_historic_summary_metrics
 
 
 ColorRule = Literal["none", "higher_good", "lower_good", "zero_best"]
@@ -106,6 +106,7 @@ def build_master_metrics_workbook(
     wb.remove(default_ws)
 
     summary_df, full_df, index_df, config_eval_df, config_overall_df = _records_to_dataframes(records)
+    historic_df = _build_historic_summary_df(records=records, runs_root=runs_root)
     present_metrics = [c for c in full_df.columns if c not in _ID_COLUMNS]
     specs = {name: get_metric_display_spec(name) for name in present_metrics}
 
@@ -117,6 +118,16 @@ def build_master_metrics_workbook(
         title="DeepReservoir core metrics summary",
         subtitle=f"Built from {len(records)} evaluation result(s) under {runs_root}",
     )
+    if not historic_df.empty:
+        _write_dashboard_sheet(
+            wb=wb,
+            sheet_name="Historic",
+            df=historic_df,
+            specs={name: specs[name] for name in historic_df.columns if name != "eval"},
+            title="Historic benchmark over eval window(s)",
+            subtitle="Computed from historical series over the same evaluation period(s).",
+            id_columns=["eval"],
+        )
     _write_dashboard_sheet(
         wb=wb,
         sheet_name="Full Dashboard",
@@ -238,6 +249,7 @@ _SUMMARY_METRICS = (
     "spr_freq_years_meeting_5000cfs_20d",
     "spr_freq_years_meeting_2500cfs_10d",
     "hydropower_frac_of_historic",
+    "storage_frac_of_historic",
     "niip_frac_days_demand_met_in_window",
     "niip_annual_volume_frac_of_contract",
 )
@@ -334,6 +346,40 @@ def _records_to_dataframes(
     config_eval_df, config_overall_df = _build_config_rollup_tables(pd.DataFrame(rollup_source_rows))
 
     return df_summary, df_full, df_index, config_eval_df, config_overall_df
+
+
+def _build_historic_summary_df(*, records: list[EvalMetricsRecord], runs_root: Path) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for rec in records:
+        eval_label = rec.eval_label or "eval"
+        if eval_label in seen:
+            continue
+        rollout_path = runs_root / rec.eval_dir / "eval_rollout.parquet"
+        if not rollout_path.exists():
+            continue
+        try:
+            df_roll = pd.read_parquet(rollout_path)
+        except Exception:
+            continue
+        if "date" in df_roll.columns:
+            try:
+                df_roll["date"] = pd.to_datetime(df_roll["date"])
+                df_roll = df_roll.set_index("date")
+            except Exception:
+                pass
+        if not isinstance(df_roll.index, pd.DatetimeIndex):
+            try:
+                df_roll.index = pd.to_datetime(df_roll.index)
+            except Exception:
+                continue
+        metrics = compute_historic_summary_metrics(df_roll)
+        row: dict[str, object] = {"eval": eval_label}
+        for col in _SUMMARY_METRICS:
+            row[col] = metrics.get(col, float("nan"))
+        rows.append(row)
+        seen.add(eval_label)
+    return pd.DataFrame(rows, columns=["eval", *_SUMMARY_METRICS]) if rows else pd.DataFrame(columns=["eval", *_SUMMARY_METRICS])
 
 
 # -----------------------------------------------------------------------------
@@ -473,6 +519,17 @@ _EXACT_SPECS: dict[str, MetricDisplaySpec] = {
         number_format="0.0%",
         color_rule="higher_good",
         description=METRIC_DEFINITIONS.get("hydropower_frac_of_historic", ""),
+    ),
+    "storage_frac_of_historic": MetricDisplaySpec(
+        raw_name="storage_frac_of_historic",
+        label="Storage / historic",
+        group="Dam Safety",
+        order=15,
+        include_summary=True,
+        include_full=True,
+        number_format="0.0%",
+        color_rule="higher_good",
+        description=METRIC_DEFINITIONS.get("storage_frac_of_historic", ""),
     ),
     "niip_frac_days_demand_met_in_window": MetricDisplaySpec(
         raw_name="niip_frac_days_demand_met_in_window",
@@ -924,19 +981,28 @@ def _write_dashboard_sheet(
 
     # Data rows
     for row_idx, (_, row) in enumerate(df.iterrows(), start=data_start_row):
+        max_lines = 1
         for col_idx, name in enumerate(ordered_cols, start=1):
             val = row[name]
+            if name == "reward_spec" and not pd.isna(val):
+                sval = str(val)
+                parts = [p.strip() for p in sval.split(",") if p.strip()]
+                val = "\n".join(parts) if parts else sval
+                max_lines = max(max_lines, max(1, str(val).count("\n") + 1))
             cell = ws.cell(row=row_idx, column=col_idx)
             if pd.isna(val):
                 cell.value = None
             else:
                 cell.value = val.item() if hasattr(val, "item") else val
-            cell.alignment = Alignment(horizontal=("left" if name in id_column_set else "center"), vertical="center")
+            wrap = name in {"reward_spec", "metrics_path", "manifest_path"}
+            cell.alignment = Alignment(horizontal=("left" if name in id_column_set or wrap else "center"), vertical="center", wrap_text=wrap)
             cell.border = _BORDER
             if name in id_column_set:
                 cell.fill = _ID_FILL
             else:
                 cell.number_format = specs[name].number_format
+        if max_lines > 1:
+            ws.row_dimensions[row_idx].height = max(18, 15 * max_lines)
 
     # Color metric cells after values are written.
     for name in ordered_cols:
@@ -944,7 +1010,7 @@ def _write_dashboard_sheet(
             continue
         col_idx = ordered_cols.index(name) + 1
         col_values = pd.to_numeric(df[name], errors="coerce")
-        fills = _fills_for_series(col_values, specs[name].color_rule)
+        fills = _fills_for_series(col_values, specs[name].color_rule, metric_name=name)
         for i, fill in enumerate(fills, start=data_start_row):
             ws.cell(row=i, column=col_idx).fill = fill
 
@@ -972,17 +1038,26 @@ def _write_run_index_sheet(*, wb: Workbook, df: pd.DataFrame) -> None:
         cell.border = _BORDER
 
     for row_idx, (_, row) in enumerate(df.iterrows(), start=header_row + 1):
+        max_lines = 1
         for col_idx, name in enumerate(df.columns, start=1):
             val = row[name]
+            if name == "reward_spec" and not pd.isna(val):
+                sval = str(val)
+                parts = [p.strip() for p in sval.split(",") if p.strip()]
+                val = "\n".join(parts) if parts else sval
+                max_lines = max(max_lines, max(1, str(val).count("\n") + 1))
             cell = ws.cell(row=row_idx, column=col_idx)
             if pd.isna(val):
                 cell.value = None
             else:
                 cell.value = val.item() if hasattr(val, "item") else val
-            cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=(name in {"reward_spec", "metrics_path", "manifest_path"}))
+            wrap = name in {"reward_spec", "metrics_path", "manifest_path"}
+            cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=wrap)
             cell.border = _BORDER
             if col_idx <= 3:
                 cell.fill = _ID_FILL
+        if max_lines > 1:
+            ws.row_dimensions[row_idx].height = max(18, 15 * max_lines)
 
     ws.freeze_panes = "A4"
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(df.shape[1])}{max(header_row + 1, ws.max_row)}"
@@ -1119,13 +1194,16 @@ def _load_manifest_metadata(manifest_path: Path | None) -> dict[str, object]:
 
 
 def _relative_eval_label(rel_metrics_path: Path) -> str:
-    parts = rel_metrics_path.parts
-    if len(parts) <= 2:
+    parts = list(rel_metrics_path.parts[:-1])
+    if not parts:
         return "eval"
-    eval_parts = parts[1:-1]
-    if not eval_parts:
+    parts = parts[1:]
+    parts = [p for p in parts if not re.fullmatch(r"seed[_-]*\d+", p, flags=re.IGNORECASE)]
+    if not parts:
         return "eval"
-    return "/".join(eval_parts)
+    cleaned = [re.sub(r"^eval__", "", p) for p in parts]
+    label = "/".join(cleaned).strip("/")
+    return label or "eval"
 
 
 
@@ -1333,7 +1411,44 @@ def _set_plain_column_widths(ws) -> None:
 
 
 
-def _fills_for_series(series: pd.Series, rule: ColorRule) -> list[PatternFill]:
+_FIXED_RANGE_RULES: dict[str, tuple[ColorRule, float, float]] = {
+    "dam_safety_frac_days_within_storage_bounds": ("higher_good", 0.0, 1.0),
+    "esa_min_flow_frac_days_met": ("higher_good", 0.0, 1.0),
+    "flooding_frac_days_met": ("higher_good", 0.0, 1.0),
+    "spr_curve_mean_abs_error_cfs": ("lower_good", 0.0, 5000.0),
+    "spr_curve_mean_error_cfs": ("zero_best", -5000.0, 5000.0),
+    "spr_curve_frac_days_within_500cfs": ("higher_good", 0.0, 1.0),
+    "spr_freq_years_meeting_10000cfs_5d": ("higher_good", 0.0, 1.0),
+    "spr_freq_years_meeting_8000cfs_19d": ("higher_good", 0.0, 1.0),
+    "spr_freq_years_meeting_5000cfs_20d": ("higher_good", 0.0, 1.0),
+    "spr_freq_years_meeting_2500cfs_10d": ("higher_good", 0.0, 1.0),
+    "hydropower_frac_of_historic": ("higher_good", 0.0, 1.5),
+    "storage_frac_of_historic": ("higher_good", 0.0, 1.5),
+    "niip_frac_days_demand_met_in_window": ("higher_good", 0.0, 1.0),
+    "niip_annual_volume_frac_of_contract": ("higher_good", 0.0, 1.5),
+}
+
+
+def _base_metric_name(name: str) -> str:
+    m = re.fullmatch(r"(?:mean|std)__(.+)", name)
+    return m.group(1) if m else name
+
+
+def _score_from_fixed_range(value: float, *, low: float, high: float, rule: ColorRule) -> float:
+    if rule in {"higher_good", "lower_good"}:
+        span = high - low
+        score = 0.5 if span == 0.0 else (float(value) - float(low)) / span
+        score = max(0.0, min(1.0, score))
+        if rule == "lower_good":
+            score = 1.0 - score
+        return score
+    max_abs = max(abs(float(low)), abs(float(high)))
+    if max_abs == 0.0:
+        return 1.0
+    return max(0.0, 1.0 - min(abs(float(value)) / max_abs, 1.0))
+
+
+def _fills_for_series(series: pd.Series, rule: ColorRule, *, metric_name: str | None = None) -> list[PatternFill]:
     vals = pd.to_numeric(series, errors="coerce")
     finite = [float(v) for v in vals if pd.notna(v) and math.isfinite(float(v))]
     if rule == "none":
@@ -1341,7 +1456,17 @@ def _fills_for_series(series: pd.Series, rule: ColorRule) -> list[PatternFill]:
     if not finite:
         return [_MISSING_FILL for _ in vals]
 
+    fixed = _FIXED_RANGE_RULES.get(_base_metric_name(metric_name or ""))
     fills: list[PatternFill] = []
+    if fixed is not None and fixed[0] == rule:
+        _, low, high = fixed
+        for v in vals:
+            if pd.isna(v) or not math.isfinite(float(v)):
+                fills.append(_MISSING_FILL)
+                continue
+            fills.append(_fill_for_score(_score_from_fixed_range(float(v), low=low, high=high, rule=rule)))
+        return fills
+
     if rule in {"higher_good", "lower_good"}:
         vmin = min(finite)
         vmax = max(finite)
@@ -1356,7 +1481,6 @@ def _fills_for_series(series: pd.Series, rule: ColorRule) -> list[PatternFill]:
             fills.append(_fill_for_score(score))
         return fills
 
-    # zero_best
     max_abs = max(abs(v) for v in finite)
     for v in vals:
         if pd.isna(v) or not math.isfinite(float(v)):

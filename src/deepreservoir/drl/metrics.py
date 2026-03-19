@@ -115,10 +115,14 @@ METRIC_DEFINITIONS: dict[str, str] = {
         "Pattern: spr_mean_frac_window_days_above_<thr>cfs = mean across water years of the fraction of SPR-window days with Farmington proxy >= <thr>."
     ),
 
-    # --- Hydropower ---
+    # --- Hydropower / storage relative to historic ---
     "hydropower_frac_of_historic": (
         "Total agent generation as a fraction of historic generation over the test rollout: "
         "sum(hydro_agent_mwh) / sum(hydro_hist_mwh). Returns NaN if historic sum is 0 or columns missing."
+    ),
+    "storage_frac_of_historic": (
+        "Total agent storage as a fraction of historic storage over the test rollout: "
+        "sum(storage_agent_af_end or storage_agent_af) / sum(storage_hist_af). Returns NaN if historic sum is 0 or columns missing."
     ),
 
     # --- NIIP ---
@@ -621,6 +625,34 @@ def _metric_hydropower_frac_of_historic(
     return out
 
 
+def _metric_storage_frac_of_historic(
+    df: pd.DataFrame,
+    *,
+    agent_col: str = "storage_agent_af_end",
+    fallback_agent_col: str = "storage_agent_af",
+    hist_col: str = "storage_hist_af",
+) -> dict[str, float]:
+    """Storage: total storage relative to historic (fraction).
+
+    Computed as sum(agent storage) / sum(historic storage) over the test period.
+    This is intentionally always computed when the columns are available; it is
+    a descriptive benchmark rather than an objective-gated score.
+    """
+    out: dict[str, float] = {"storage_frac_of_historic": float("nan")}
+    agent_name = agent_col if agent_col in df.columns else fallback_agent_col
+    if agent_name not in df.columns or hist_col not in df.columns:
+        return out
+
+    a = df[agent_name].astype(float)
+    h = df[hist_col].astype(float)
+    denom = float(np.nansum(h.values))
+    if denom == 0.0:
+        return out
+
+    out["storage_frac_of_historic"] = float(np.nansum(a.values) / denom)
+    return out
+
+
 def _niip_get_delivery_series(
     df: pd.DataFrame,
     *,
@@ -887,6 +919,97 @@ def _metric_spring_peak_release(
 
 
 
+
+
+def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
+    """Compute a compact historic benchmark row from an eval rollout dataframe.
+
+    The returned metrics are aligned with the workbook summary columns and use
+    historic data only (no agent-controlled releases).
+    """
+    out: dict[str, float] = {
+        "dam_safety_frac_days_within_storage_bounds": float("nan"),
+        "esa_min_flow_frac_days_met": float("nan"),
+        "flooding_frac_days_met": float("nan"),
+        "spr_curve_mean_abs_error_cfs": float("nan"),
+        "spr_curve_frac_days_within_500cfs": float("nan"),
+        "hydropower_frac_of_historic": float("nan"),
+        "storage_frac_of_historic": float("nan"),
+        "niip_frac_days_demand_met_in_window": float("nan"),
+        "niip_annual_volume_frac_of_contract": float("nan"),
+    }
+    for thr, dur, _ in _SPR_THRESHOLD_SPECS:
+        out[f"spr_freq_years_meeting_{int(thr)}cfs_{int(dur)}d"] = float("nan")
+
+    if df_eval is None or df_eval.empty:
+        return out
+
+    # Storage against the same bounds used for the agent summaries.
+    if "storage_hist_af" in df_eval.columns:
+        low_af = _first_present_scalar(df_eval, "min_storage_af", "deadpool_storage_af")
+        high_af = _first_present_scalar(df_eval, "max_storage_af")
+        if low_af is None:
+            low_af = 500_000.0
+        if high_af is None:
+            high_af = 1_731_750.0
+        s = df_eval["storage_hist_af"].astype(float)
+        out["dam_safety_frac_days_within_storage_bounds"] = float(((s >= float(low_af)) & (s <= float(high_af))).mean())
+        out["storage_frac_of_historic"] = 1.0
+
+    # ESA min flow on historical releases.
+    if {"animas_farmington_q_cfs", "release_cfs"}.issubset(df_eval.columns):
+        animas = df_eval["animas_farmington_q_cfs"].astype(float)
+        release = df_eval["release_cfs"].astype(float)
+        out["esa_min_flow_frac_days_met"] = float(((animas.fillna(0.0) + release.fillna(0.0)) >= 500.0).mean())
+
+    # Flooding from historical Farmington flow, with a simple 2-day lag computed
+    # from the same observed series.
+    if "sj_farmington_q_cfs" in df_eval.columns:
+        q0 = df_eval["sj_farmington_q_cfs"].astype(float)
+        qlag2 = q0.shift(2)
+        safe_same = q0 < 5000.0
+        safe_lag2 = qlag2.isna() | (qlag2 < 12000.0)
+        out["flooding_frac_days_met"] = float((safe_same & safe_lag2).mean())
+
+        # SPR threshold frequencies based on observed Farmington flow.
+        curve = SpringPeakReleaseCurve()
+        target = curve.targets_for_date_index(df_eval.index).astype(float)
+        spr_mask = target > 0.0
+        if bool(spr_mask.any()):
+            if "release_cfs" in df_eval.columns:
+                rel = df_eval["release_cfs"].astype(float)
+                err = rel - target
+                out["spr_curve_mean_abs_error_cfs"] = float(err.abs()[spr_mask].mean())
+                out["spr_curve_frac_days_within_500cfs"] = float((err.abs()[spr_mask] <= 500.0).mean())
+
+            idx = df_eval.index
+            wy = idx.year + (idx.month >= 10).astype(int)
+            wy_series = pd.Series(wy, index=idx, name="wy")
+            for thr, dur_days, _target_freq in _SPR_THRESHOLD_SPECS:
+                thr_i = int(thr)
+                dur_i = int(dur_days)
+                met_flags: list[bool] = []
+                for _wy_val, g_idx in wy_series.groupby(wy_series).groups.items():
+                    g_idx = pd.DatetimeIndex(g_idx)
+                    g_spr = spr_mask.loc[g_idx]
+                    spr_days = int(g_spr.sum())
+                    if spr_days <= 0:
+                        continue
+                    b = g_spr & (q0.loc[g_idx] >= float(thr))
+                    met_flags.append(bool(_max_consecutive_true(b) >= int(dur_days)))
+                if met_flags:
+                    out[f"spr_freq_years_meeting_{thr_i}cfs_{dur_i}d"] = float(np.mean(met_flags))
+
+    # Historic relative-to-historic metrics are 1.0 by construction when the
+    # necessary historic columns are available.
+    if "hydro_hist_mwh" in df_eval.columns and float(np.nansum(df_eval["hydro_hist_mwh"].astype(float).to_numpy())) != 0.0:
+        out["hydropower_frac_of_historic"] = 1.0
+
+    # NIIP historic delivery is not explicitly represented in the current eval
+    # rollout export, so leave NIIP benchmark cells blank for now.
+    return out
+
+
 # -----------------------------------------------------------------------------
 # Registry + groups
 # -----------------------------------------------------------------------------
@@ -904,6 +1027,7 @@ METRIC_REGISTRY: dict[str, MetricSpec] = {
     "spring_peak_release": MetricSpec(func=_metric_spring_peak_release_scoreboard, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
     "spring_peak_release_detail": MetricSpec(func=_metric_spring_peak_release, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
     "hydropower": MetricSpec(func=_metric_hydropower_frac_of_historic, requires=()),
+    "storage_relative": MetricSpec(func=_metric_storage_frac_of_historic, requires=()),
     "niip": MetricSpec(func=_metric_niip_delivery_and_volume, requires=()),
 
     # Optional extra objective diagnostics
@@ -924,10 +1048,11 @@ METRIC_GROUPS: dict[str, tuple[str, ...]] = {
         "flooding",
         "spring_peak_release",
         "hydropower",
+        "storage_relative",
         "niip",
     ),
     "rewards": ("rewards_summary", "reward_components_summary"),
-    "objectives": ("dam_safety", "esa_min_flow", "flooding", "spring_peak_release", "hydropower", "niip"),
+    "objectives": ("dam_safety", "esa_min_flow", "flooding", "spring_peak_release", "hydropower", "storage_relative", "niip"),
     "dam_safety_detail": ("dam_safety_detail",),
     "actions": ("action_saturation", "release_constraint_binding"),
     "diagnostics": ("dam_safety_detail", "action_saturation", "release_constraint_binding", "operational_diagnostics"),

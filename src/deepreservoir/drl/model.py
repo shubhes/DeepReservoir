@@ -499,6 +499,8 @@ def run_rollout_window(
             "release_sj_main_cfs",
             "release_niip_cfs",
             "sj_main_flow_cfs",
+            "sj_at_farmington_cfs",
+            "sj_at_farmington_lag2_cfs",
             "spill_cfs",
             "spill_af",
             "deadpool_block",
