@@ -515,7 +515,11 @@ def run_rollout_window(
         ]
         for key in passthrough_keys:
             if key in info_step:
-                rec[key] = float(info_step[key]) if key != "deadpool_block" else int(bool(info_step[key]))
+                val = info_step[key]
+                if key == "deadpool_block":
+                    rec[key] = int(bool(val))
+                else:
+                    rec[key] = np.nan if val is None else float(val)
 
         if "deadpool_storage_af" in info_step:
             rec["deadpool_storage_af"] = float(info_step["deadpool_storage_af"])

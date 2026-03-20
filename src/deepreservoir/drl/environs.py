@@ -298,7 +298,9 @@ class NavajoReservoirEnv(Env):
         dam_variants = {variant for obj, variant in active_pairs if obj == "dam_safety"}
 
         spring_farmington_variants = {"farmington_10k", "farmington_10k_shaped"}
+        spring_bluff_variants = {"bluff_10k"}
         need_spring_farmington = bool(spring_variants & spring_farmington_variants)
+        need_spring_bluff = bool(spring_variants & spring_bluff_variants)
 
         # Eval should keep the full payload intact for downstream analysis.
         compute_full = bool(self.is_eval or comps is None)
@@ -309,14 +311,16 @@ class NavajoReservoirEnv(Env):
             or ("esa_min_flow" in active_objectives)
             or ("flooding" in active_objectives)
             or need_spring_farmington
+            or need_spring_bluff
         )
         self._need_sj_at_farmington = bool(
             compute_full
             or ("flooding" in active_objectives)
             or need_spring_farmington
+            or need_spring_bluff
         )
         self._need_sj_at_farmington_lag2 = bool(
-            compute_full or ("flooding" in active_objectives)
+            compute_full or ("flooding" in active_objectives) or need_spring_bluff
         )
         self._need_end_elev = bool(
             compute_full

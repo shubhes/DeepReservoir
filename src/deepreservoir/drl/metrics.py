@@ -112,7 +112,7 @@ METRIC_DEFINITIONS: dict[str, str] = {
         "Pattern: spr_mean_max_consec_days_<thr>cfs = mean across water years of the maximum consecutive-day run >= <thr> during SPR window."
     ),
     "spr_mean_frac_window_days_above_*": (
-        "Pattern: spr_mean_frac_window_days_above_<thr>cfs = mean across water years of the fraction of SPR-window days with Farmington proxy >= <thr>."
+        "Pattern: spr_mean_frac_window_days_above_<thr>cfs = mean across water years of the fraction of SPR-window days with Bluff proxy >= <thr>."
     ),
 
     # --- Hydropower / storage relative to historic ---
@@ -822,14 +822,15 @@ def _metric_spring_peak_release(
     *,
     animas_col: str = "animas_farmington_q_cfs",
     release_col: str = "release_sj_main_cfs",
+    bluff_proxy_col: str = "sj_at_farmington_lag2_cfs",
     curve_tolerance_cfs: float = 500.0,
     threshold_specs: Sequence[tuple[float, int, float]] = _SPR_THRESHOLD_SPECS,
 ) -> dict[str, float]:
     """SPR metrics: threshold/duration frequencies + curve-matching summaries.
 
     - Uses SpringPeakReleaseCurve to define the SPR window (target>0).
-    - Farmington proxy is computed as animas_farmington_q_cfs + release_sj_main_cfs
-      (to avoid any ambiguity with precomputed sj_at_farmington columns).
+    - Evaluates SPR at the Bluff proxy, approximated as the Farmington proxy
+      (Animas @ Farmington + agent SJ mainstem release) lagged by 2 days.
     - For each (threshold, duration, target_frequency):
         * frequency of water years meeting threshold for at least duration consecutive days
         * over/underachievement relative to target_frequency
@@ -839,15 +840,12 @@ def _metric_spring_peak_release(
     out: dict[str, float] = {}
 
     if animas_col not in df.columns or release_col not in df.columns:
-        # Required columns are enforced by registry validation; keep safe here too.
         return out
 
     curve = SpringPeakReleaseCurve()
     target = curve.targets_for_date_index(df.index).astype(float)
     spr_mask = target > 0.0
 
-    # If the rollout doesn't cover the SPR window at all, emit NaNs so downstream
-    # aggregation doesn't silently treat "0 days" as success/failure.
     if not bool(spr_mask.any()):
         out["spr_curve_mean_abs_error_cfs"] = float("nan")
         out["spr_curve_mean_error_cfs"] = float("nan")
@@ -862,18 +860,20 @@ def _metric_spring_peak_release(
             out[f"spr_mean_frac_window_days_above_{thr_i}cfs"] = float("nan")
         return out
 
-    # Curve matching diagnostics (San Juan mainstem release only)
     rel = df[release_col].astype(float)
-    err = rel - target
+    animas = df[animas_col].astype(float)
+    farm = animas + rel
+
+    if bluff_proxy_col in df.columns:
+        bluff = df[bluff_proxy_col].astype(float)
+    else:
+        bluff = farm.shift(2)
+
+    err = bluff - target
     out["spr_curve_mean_abs_error_cfs"] = float(err.abs()[spr_mask].mean())
     out["spr_curve_mean_error_cfs"] = float(err[spr_mask].mean())
     out["spr_curve_frac_days_within_500cfs"] = float((err.abs()[spr_mask] <= float(curve_tolerance_cfs)).mean())
 
-    # Farmington proxy for threshold-based targets
-    animas = df[animas_col].astype(float)
-    farm = animas + rel
-
-    # Group by water year (Oct 1 start); SPR window is entirely within a WY.
     idx = df.index
     wy = idx.year + (idx.month >= 10).astype(int)
     wy_series = pd.Series(wy, index=idx, name="wy")
@@ -886,14 +886,14 @@ def _metric_spring_peak_release(
         max_runs: list[int] = []
         pct_days_above: list[float] = []
 
-        for wy_val, g_idx in wy_series.groupby(wy_series).groups.items():
+        for _wy_val, g_idx in wy_series.groupby(wy_series).groups.items():
             g_idx = pd.DatetimeIndex(g_idx)
             g_spr = spr_mask.loc[g_idx]
             spr_days = int(g_spr.sum())
             if spr_days <= 0:
                 continue
 
-            b = g_spr & (farm.loc[g_idx] >= float(thr))
+            b = g_spr & (bluff.loc[g_idx] >= float(thr))
             max_run = _max_consecutive_true(b)
 
             met_flags.append(bool(max_run >= int(dur_days)))
@@ -971,14 +971,14 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
         safe_lag2 = qlag2.isna() | (qlag2 < 12000.0)
         out["flooding_frac_days_met"] = float((safe_same & safe_lag2).mean())
 
-        # SPR threshold frequencies based on observed Farmington flow.
+        # SPR threshold frequencies based on the Bluff proxy, approximated as
+        # observed Farmington flow lagged by 2 days.
         curve = SpringPeakReleaseCurve()
         target = curve.targets_for_date_index(df_eval.index).astype(float)
         spr_mask = target > 0.0
         if bool(spr_mask.any()):
             if "release_cfs" in df_eval.columns:
-                rel = df_eval["release_cfs"].astype(float)
-                err = rel - target
+                err = qlag2 - target
                 out["spr_curve_mean_abs_error_cfs"] = float(err.abs()[spr_mask].mean())
                 out["spr_curve_frac_days_within_500cfs"] = float((err.abs()[spr_mask] <= 500.0).mean())
 
@@ -995,7 +995,7 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
                     spr_days = int(g_spr.sum())
                     if spr_days <= 0:
                         continue
-                    b = g_spr & (q0.loc[g_idx] >= float(thr))
+                    b = g_spr & (qlag2.loc[g_idx] >= float(thr))
                     met_flags.append(bool(_max_consecutive_true(b) >= int(dur_days)))
                 if met_flags:
                     out[f"spr_freq_years_meeting_{thr_i}cfs_{dur_i}d"] = float(np.mean(met_flags))

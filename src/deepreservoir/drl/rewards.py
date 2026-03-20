@@ -603,6 +603,42 @@ def esa_spring_peak_farmington_10k(ctx: RewardContext) -> float:
 
     return 30 * magnitude * balance
 
+
+@register_reward("esa_spring_peak_release", "bluff_10k")
+def esa_spring_peak_bluff_10k(ctx: RewardContext) -> float:
+    """
+    Corrected SPR 10k reward using the Bluff proxy.
+
+    Bluff is approximated as the Farmington proxy lagged by 2 days:
+      sj_at_farmington_lag2_cfs = (Animas @ Farmington + agent SJ mainstem release) shifted by 2 days.
+
+    This reward intentionally leaves the legacy ``farmington_10k`` variant untouched
+    so ongoing experiments remain reproducible.
+
+    Returns
+    -------
+    0 outside the SPR window or before the lagged Bluff proxy is available.
+    Inside the SPR window, apply a soft magnitude ramp from 10k to 12k cfs.
+    """
+    date = pd.to_datetime(ctx.date)
+
+    target = _SPRING_PEAK_CURVE.target_cfs_from_date(date)
+    if target <= 0.0:
+        return 0.0
+
+    q_bluff = ctx.info.get("sj_at_farmington_lag2_cfs", None)
+    if q_bluff is None or not np.isfinite(q_bluff):
+        return 0.0
+
+    total = float(q_bluff)
+    threshold = 10_000.0
+    if total < threshold:
+        return 0.0
+
+    ramp = 2_000.0
+    magnitude = (total - threshold) / ramp
+    return 30.0 * float(np.clip(magnitude, 0.0, 1.0))
+
 @register_reward("esa_spring_peak_release", "farmington_10k_shaped")
 def spr_farmington_10k_shaped(ctx: RewardContext) -> float:
     """
