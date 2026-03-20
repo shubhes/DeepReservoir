@@ -636,7 +636,7 @@ class NavajoReservoirEnv(Env):
 
         if self._need_sj_at_farmington_lag2:
             info["sj_at_farmington_lag2_cfs"] = (
-                None if sj_at_farm_lag2_cfs is None else float(sj_at_farm_lag2_cfs)
+                np.nan if sj_at_farm_lag2_cfs is None else float(sj_at_farm_lag2_cfs)
             )
 
         if self._need_hydropower and hydropower_mwh is not None:
@@ -676,7 +676,7 @@ class NavajoReservoirEnv(Env):
                     "deadpool_block": bool(deadpool_block),
                     "elev_ft": float(new_elev_ft),
                     "sj_at_farmington_cfs": float(sj_at_farm_cfs) if sj_at_farm_cfs is not None else float(sj_main_flow_cfs),
-                    "sj_at_farmington_lag2_cfs": None
+                    "sj_at_farmington_lag2_cfs": np.nan
                     if sj_at_farm_lag2_cfs is None
                     else float(sj_at_farm_lag2_cfs),
                     "animas_farmington_q_cfs": float(animas_cfs),

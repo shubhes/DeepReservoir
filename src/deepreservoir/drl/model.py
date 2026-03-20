@@ -447,6 +447,9 @@ def run_rollout_window(
     step = 0
     records: list[dict] = []
 
+    def _to_float_or_nan(val: object) -> float:
+        return np.nan if val is None else float(val)
+
     while True:
         # Date
         if hasattr(eval_env, "_current_date") and callable(eval_env._current_date):  # type: ignore[attr-defined]
@@ -484,9 +487,9 @@ def run_rollout_window(
 
         # State after step / operational diagnostics
         if "storage_af" in info_step:
-            rec["storage_agent_af_end"] = float(info_step["storage_af"])
+            rec["storage_agent_af_end"] = _to_float_or_nan(info_step["storage_af"])
         if "elev_ft" in info_step:
-            rec["elev_agent_ft_end"] = float(info_step["elev_ft"])
+            rec["elev_agent_ft_end"] = _to_float_or_nan(info_step["elev_ft"])
         elif "storage_agent_af_end" in rec:
             rec["elev_agent_ft_end"] = (
                 float(eval_env._capacity_to_elev_scalar(rec["storage_agent_af_end"]))
@@ -519,25 +522,25 @@ def run_rollout_window(
                 if key == "deadpool_block":
                     rec[key] = int(bool(val))
                 else:
-                    rec[key] = np.nan if val is None else float(val)
+                    rec[key] = _to_float_or_nan(val)
 
         if "deadpool_storage_af" in info_step:
-            rec["deadpool_storage_af"] = float(info_step["deadpool_storage_af"])
-            rec.setdefault("min_storage_af", float(info_step["deadpool_storage_af"]))
+            rec["deadpool_storage_af"] = _to_float_or_nan(info_step["deadpool_storage_af"])
+            rec.setdefault("min_storage_af", _to_float_or_nan(info_step["deadpool_storage_af"]))
         if "max_storage_af" in info_step:
-            rec["max_storage_af"] = float(info_step["max_storage_af"])
+            rec["max_storage_af"] = _to_float_or_nan(info_step["max_storage_af"])
 
         if "total_release_cfs" in info_step:
-            rec["release_agent_cfs"] = float(info_step["total_release_cfs"])
+            rec["release_agent_cfs"] = _to_float_or_nan(info_step["total_release_cfs"])
         if "total_controlled_release_cfs" in info_step:
-            rec["release_agent_controlled_cfs"] = float(info_step["total_controlled_release_cfs"])
+            rec["release_agent_controlled_cfs"] = _to_float_or_nan(info_step["total_controlled_release_cfs"])
 
         req_sj = info_step.get("requested_release_sj_main_cfs")
         req_niip = info_step.get("requested_release_niip_cfs")
         if req_sj is not None:
-            rec["requested_release_sj_main_cfs"] = float(req_sj)
+            rec["requested_release_sj_main_cfs"] = _to_float_or_nan(req_sj)
         if req_niip is not None:
-            rec["requested_release_niip_cfs"] = float(req_niip)
+            rec["requested_release_niip_cfs"] = _to_float_or_nan(req_niip)
         if req_sj is not None or req_niip is not None:
             rec["requested_total_release_cfs"] = float((req_sj or 0.0) + (req_niip or 0.0))
 
@@ -565,7 +568,7 @@ def run_rollout_window(
 
         # Hydropower: prefer the env-computed value (controlled SJ release + end-of-step elevation)
         if "hydropower_mwh" in info_step:
-            rec["hydro_agent_mwh"] = float(info_step["hydropower_mwh"])
+            rec["hydro_agent_mwh"] = _to_float_or_nan(info_step["hydropower_mwh"])
         elif "release_sj_main_cfs" in rec:
             elev_for_hp = float(rec.get("elev_agent_ft_end", elev_agent_ft))
             hp_agent = navajo_power_generation_scalar(
