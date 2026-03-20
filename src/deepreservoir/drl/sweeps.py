@@ -321,15 +321,15 @@ def _sbatch_lines(normalized: dict[str, Any], *, n_tasks: int, logs_dir: Path) -
     return lines
 
 
-def _write_script(path: Path, body_lines: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as f:
-        f.write("#!/bin/bash\n")
-        for line in body_lines:
-            f.write(line.rstrip() + "\n")
-    path.chmod(0o755)
-
-
+def _write_script(path: Path, text: str, shell_executable: str = "/bin/bash") -> None:
+    script_text = text
+    if script_text.startswith("#!"):
+        lines = script_text.splitlines()
+        lines[0] = f"#!{shell_executable}"
+        script_text = "\n".join(lines) + ("\n" if script_text.endswith("\n") else "")
+    path.write_text(script_text, encoding="utf-8")
+    path.chmod(path.stat().st_mode | 0o111)
+    
 def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = None) -> dict[str, Any]:
     spec_path = Path(spec_path).resolve()
     normalized = _normalize_spec(spec_path)
