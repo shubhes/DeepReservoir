@@ -35,32 +35,56 @@
     {
       "name": "base_n015_spr6_f1_h1",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2]
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     },
     {
       "name": "niip_low_n010_spr6_f1_h1",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.10,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2]
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     },
     {
       "name": "niip_high_n020_spr6_f1_h1",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.20,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2]
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     },
     {
       "name": "spr_high_n015_spr8_f1_h1",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@8.0",
-      "seeds": [0, 1, 2]
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     },
     {
       "name": "flood_high_n015_spr6_f125_h1",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.25,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2]
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     },
     {
       "name": "hydro_high_n015_spr6_f1_h125",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.25,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2]
+      "seeds": [
+        0,
+        1,
+        2
+      ]
     }
   ],
   "slurm": {
@@ -69,6 +93,8 @@
     "cpus_per_task": 4,
     "mem": "16G",
     "array_parallelism": 3,
-    "activate": "export PATH=/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin:$PATH && export PYTHONPATH=/vast/projects/vote/DeepReservoir/src:$PYTHONPATH"
+    "activate": "export PYTHONPATH=/vast/projects/vote/DeepReservoir/src:$PYTHONPATH",
+    "shell": "/bin/bash -l",
+    "python_executable": "/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python"
   }
 }

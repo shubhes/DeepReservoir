@@ -312,6 +312,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # ------------------------------------------------------------------
+    # submit-sweep
+    # ------------------------------------------------------------------
+    p_submit = sub.add_parser(
+        "submit-sweep",
+        help="Materialize a JSON sweep spec and immediately submit the array + dependent report jobs via sbatch",
+    )
+    p_submit.add_argument("--spec", type=str, required=True, help="Path to a JSON sweep spec.")
+    p_submit.add_argument(
+        "--outdir",
+        type=str,
+        default=None,
+        help="Control/output directory for generated plan + scripts. Default: <runs_root>/<sweep_name>/_sweep",
+    )
+
+    # ------------------------------------------------------------------
     # run-sweep-task
     # ------------------------------------------------------------------
     p_task = sub.add_parser(
@@ -343,6 +358,18 @@ def cmd_plan_sweep(args) -> None:
         f"{result['plan_path']} (tasks={result['n_tasks']}, sweep_root={result['sweep_root']})"
     )
     print(f"[cli] SLURM helper dir: {result['control_dir']}")
+
+
+def cmd_submit_sweep(args) -> None:
+    plan = sweeps.materialize_sweep_plan(spec_path=args.spec, outdir=args.outdir)
+    print(
+        "[cli] wrote sweep plan: "
+        f"{plan['plan_path']} (tasks={plan['n_tasks']}, sweep_root={plan['sweep_root']})"
+    )
+    print(f"[cli] SLURM helper dir: {plan['control_dir']}")
+    result = sweeps.submit_materialized_sweep(plan["control_dir"])
+    print(f"[cli] submitted sweep array job: {result['array_jobid']}")
+    print(f"[cli] submitted report job: {result['report_jobid']}")
 
 
 def cmd_run_sweep_task(args) -> None:
@@ -629,6 +656,8 @@ def main(argv=None) -> None:
         cmd_report_metrics(args)
     elif args.cmd == "plan-sweep":
         cmd_plan_sweep(args)
+    elif args.cmd == "submit-sweep":
+        cmd_submit_sweep(args)
     elif args.cmd == "run-sweep-task":
         cmd_run_sweep_task(args)
     else:

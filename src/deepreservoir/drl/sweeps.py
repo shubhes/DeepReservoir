@@ -263,10 +263,30 @@ def _shell_setup_lines(normalized: dict[str, Any]) -> list[str]:
         lines.append(f'export PYTHONPATH="{extra_pythonpath}:${{PYTHONPATH}}"')
     for mod in slurm.get("module_loads", []) or []:
         lines.append(str(mod))
+    for cmd in slurm.get("setup_commands", []) or []:
+        lines.append(str(cmd))
     activate = slurm.get("activate")
     if activate:
         lines.append(str(activate))
     return lines
+
+
+def _shell_executable(normalized: dict[str, Any]) -> str:
+    slurm = normalized.get("slurm", {}) or {}
+    shell = slurm.get("shell")
+    if shell:
+        return str(shell)
+    if slurm.get("login_shell"):
+        return "/bin/bash -l"
+    return "/bin/bash"
+
+
+def _python_executable(normalized: dict[str, Any]) -> str:
+    slurm = normalized.get("slurm", {}) or {}
+    py = slurm.get("python_executable")
+    if py:
+        return str(py)
+    return "python"
 
 
 def _sbatch_lines(normalized: dict[str, Any], *, n_tasks: int, logs_dir: Path) -> list[str]:
@@ -341,8 +361,7 @@ def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = No
         "",
         "Recommended usage:",
         "  1) Inspect task_matrix.csv.",
-        "  2) Optionally edit the generated sbatch scripts for resources/accounting.",
-        "  3) Run ./submit_sweep.sh on the HPC login node.",
+        "  2) Run ./submit_sweep.sh on the HPC login node (or use `submit-sweep` from the CLI).",
         "",
         "Notes:",
         "  - Each task trains into its own run directory and then evaluates all configured windows.",
@@ -352,12 +371,14 @@ def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = No
     (control_dir / "README.txt").write_text("\n".join(readme_lines) + "\n", encoding="utf-8")
 
     setup_lines = ["set -euo pipefail"] + _shell_setup_lines(plan)
+    shell_executable = _shell_executable(plan)
+    python_executable = _python_executable(plan)
     array_script = []
     array_script.extend(_sbatch_lines(plan, n_tasks=len(plan["tasks"]), logs_dir=logs_dir))
     array_script.extend(setup_lines)
     array_script.append('TASK_ID="${SLURM_ARRAY_TASK_ID}"')
-    array_script.append(f'python -m deepreservoir.drl.cli run-sweep-task --plan "{plan_path}" --task-id "${{TASK_ID}}"')
-    _write_script(control_dir / "sweep_array.sbatch", array_script)
+    array_script.append(f'{python_executable} -m deepreservoir.drl.cli run-sweep-task --plan "{plan_path}" --task-id "${{TASK_ID}}"')
+    _write_script(control_dir / "sweep_array.sbatch", array_script, shell_executable=shell_executable)
 
     report_script = []
     report_script.extend([
@@ -371,8 +392,8 @@ def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = No
         if val is not None and str(val) != "":
             report_script.append(f"#SBATCH {flag}={val}")
     report_script.extend(setup_lines)
-    report_script.append(f'python -m deepreservoir.drl.cli report-metrics --runs-root "{sweep_root}"')
-    _write_script(control_dir / "sweep_report.sbatch", report_script)
+    report_script.append(f'{python_executable} -m deepreservoir.drl.cli report-metrics --runs-root "{sweep_root}"')
+    _write_script(control_dir / "sweep_report.sbatch", report_script, shell_executable=shell_executable)
 
     submit_lines = [
         "set -euo pipefail",
@@ -383,13 +404,47 @@ def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = No
         'REPORT_JOBID=$(sbatch --parsable --dependency=afterok:${ARRAY_JOBID} "$HERE/sweep_report.sbatch")',
         'echo "Submitted report job: ${REPORT_JOBID}"',
     ]
-    _write_script(control_dir / "submit_sweep.sh", submit_lines)
+    _write_script(control_dir / "submit_sweep.sh", submit_lines, shell_executable=shell_executable)
 
     return {
         "plan_path": str(plan_path),
         "control_dir": str(control_dir),
         "sweep_root": str(sweep_root),
         "n_tasks": len(plan["tasks"]),
+    }
+
+
+def submit_materialized_sweep(control_dir: Path | str) -> dict[str, str]:
+    control_dir = Path(control_dir).resolve()
+    array_script = control_dir / "sweep_array.sbatch"
+    report_script = control_dir / "sweep_report.sbatch"
+    if not array_script.exists():
+        raise FileNotFoundError(f"Missing array script: {array_script}")
+    if not report_script.exists():
+        raise FileNotFoundError(f"Missing report script: {report_script}")
+
+    array_proc = subprocess.run(
+        ["sbatch", "--parsable", str(array_script)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    array_jobid = array_proc.stdout.strip().split(";")[0]
+
+    report_proc = subprocess.run(
+        ["sbatch", "--parsable", f"--dependency=afterok:{array_jobid}", str(report_script)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report_jobid = report_proc.stdout.strip().split(";")[0]
+
+    submit_script = control_dir / "submit_sweep.sh"
+    return {
+        "control_dir": str(control_dir),
+        "submit_script": str(submit_script),
+        "array_jobid": array_jobid,
+        "report_jobid": report_jobid,
     }
 
 
