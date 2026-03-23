@@ -612,7 +612,7 @@ def get_metric_display_spec(raw_name: str) -> MetricDisplaySpec:
         thr = int(m.group(1))
         return MetricDisplaySpec(
             raw_name=raw_name,
-            label=f"{_thr_label(thr)} max run",
+            label=f"{_thr_label(thr)} total days above",
             group="SPR Thresholds",
             order=200 + _spr_order(thr, 0),
             include_summary=False,

@@ -100,7 +100,7 @@ METRIC_DEFINITIONS: dict[str, str] = {
     ),
     "spr_freq_years_meeting_*": (
         "Pattern: spr_freq_years_meeting_<thr>cfs_<dur>d = fraction of water years where the Farmington proxy "
-        "(animas_farmington_q_cfs + release_sj_main_cfs) stays >= <thr> for at least <dur> consecutive days during SPR window."
+        "(animas_farmington_q_cfs + release_sj_main_cfs) is >= <thr> for at least <dur> total days during the SPR window (not necessarily consecutive)."
     ),
     "spr_target_frequency_*": (
         "Pattern: spr_target_frequency_<thr>cfs_<dur>d = recommended annual frequency target for that threshold/duration pair."
@@ -109,7 +109,7 @@ METRIC_DEFINITIONS: dict[str, str] = {
         "Pattern: spr_overachievement_<thr>cfs_<dur>d = achieved frequency - target frequency (positive = overachieving, negative = underachieving)."
     ),
     "spr_mean_max_consec_days_*": (
-        "Pattern: spr_mean_max_consec_days_<thr>cfs = mean across water years of the maximum consecutive-day run >= <thr> during SPR window."
+        "Pattern: spr_mean_max_consec_days_<thr>cfs = legacy metric name retained for compatibility; values are the mean across water years of the total number of SPR-window days with Bluff proxy >= <thr> (not necessarily consecutive)."
     ),
     "spr_mean_frac_window_days_above_*": (
         "Pattern: spr_mean_frac_window_days_above_<thr>cfs = mean across water years of the fraction of SPR-window days with Bluff proxy >= <thr>."
@@ -846,9 +846,9 @@ def _metric_spring_peak_release(
     - Evaluates SPR at the Bluff proxy, approximated as the Farmington proxy
       (Animas @ Farmington + agent SJ mainstem release) lagged by 2 days.
     - For each (threshold, duration, target_frequency):
-        * frequency of water years meeting threshold for at least duration consecutive days
+        * frequency of water years meeting threshold for at least duration total days within the SPR window
         * over/underachievement relative to target_frequency
-        * mean max consecutive-day run above threshold
+        * mean total number of SPR-window days above threshold
         * mean fraction of SPR-window days above threshold
     """
     out: dict[str, float] = {}
@@ -908,10 +908,10 @@ def _metric_spring_peak_release(
                 continue
 
             b = g_spr & (bluff.loc[g_idx] >= float(thr))
-            max_run = _max_consecutive_true(b)
+            days_above = int(b.sum())
 
-            met_flags.append(bool(max_run >= int(dur_days)))
-            max_runs.append(int(max_run))
+            met_flags.append(bool(days_above >= int(dur_days)))
+            max_runs.append(int(days_above))
             pct_days_above.append(float(b.sum()) / float(spr_days))
 
         if not met_flags:
@@ -994,7 +994,8 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
         out["flooding_frac_days_met"] = float((safe_same & safe_lag2).mean())
 
         # SPR threshold frequencies based on the Bluff proxy, approximated as
-        # observed Farmington flow lagged by 2 days.
+        # observed Farmington flow lagged by 2 days. Threshold-duration checks use
+        # total qualifying days within the SPR window, not consecutive-day runs.
         curve = SpringPeakReleaseCurve()
         target = curve.targets_for_date_index(df_eval.index).astype(float)
         spr_mask = target > 0.0
@@ -1018,7 +1019,7 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
                     if spr_days <= 0:
                         continue
                     b = g_spr & (qlag2.loc[g_idx] >= float(thr))
-                    met_flags.append(bool(_max_consecutive_true(b) >= int(dur_days)))
+                    met_flags.append(bool(int(b.sum()) >= int(dur_days)))
                 if met_flags:
                     out[f"spr_freq_years_meeting_{thr_i}cfs_{dur_i}d"] = float(np.mean(met_flags))
 
