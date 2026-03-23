@@ -43,7 +43,7 @@ _CFS_DAY_TO_ACRE_FEET = 86400.0 / 43560.0  # 1 cfs sustained for 1 day -> acre-f
 #
 # Notes
 # - All "fraction of days" metrics (e.g., *_frac_days_*) are fractions in [0, 1] (not 0–100).
-# - `hydropower_frac_of_historic` and `niip_annual_volume_frac_of_contract` are fractions in [0, 1] (not 0–100).
+# - `hydropower_frac_of_max_possible`, `storage_frac_of_max_possible`, and `niip_annual_volume_frac_of_contract` are fractions in [0, 1] (not 0–100).
 # - Objective-aligned metrics return NaN if that objective was not active in the
 #   experiment (detected by absence of `rc_<objective>.*` columns in df_test).
 # - Reward-component summaries are dynamic because reward specs vary by run.
@@ -115,14 +115,15 @@ METRIC_DEFINITIONS: dict[str, str] = {
         "Pattern: spr_mean_frac_window_days_above_<thr>cfs = mean across water years of the fraction of SPR-window days with Bluff proxy >= <thr>."
     ),
 
-    # --- Hydropower / storage relative to historic ---
-    "hydropower_frac_of_historic": (
-        "Total agent generation as a fraction of historic generation over the test rollout: "
-        "sum(hydro_agent_mwh) / sum(hydro_hist_mwh). Returns NaN if historic sum is 0 or columns missing."
+    # --- Hydropower / storage relative to maximum possible ---
+    "hydropower_frac_of_max_possible": (
+        "Total agent generation as a fraction of a practical maximum generation over the test rollout: "
+        "sum(hydro_agent_mwh) / (max_daily_hydropower_mwh * n_valid_days). The default max_daily_hydropower_mwh is 768 MWh/day, "
+        "which corresponds to the 32 MW plant-capacity ceiling over 24 hours. Returns NaN if the agent hydropower column is missing or has no valid days."
     ),
-    "storage_frac_of_historic": (
-        "Total agent storage as a fraction of historic storage over the test rollout: "
-        "sum(storage_agent_af_end or storage_agent_af) / sum(storage_hist_af). Returns NaN if historic sum is 0 or columns missing."
+    "storage_frac_of_max_possible": (
+        "Total agent storage as a fraction of maximum possible storage over the test rollout: "
+        "sum(storage_agent_af_end or storage_agent_af) / sum(max_storage_af). Returns NaN if the storage column is missing or no valid maximum-storage values are available."
     ),
 
     # --- NIIP ---
@@ -594,62 +595,75 @@ def _metric_flooding_frac_days_met(
     return out
 
 
-def _metric_hydropower_frac_of_historic(
+def _metric_hydropower_frac_of_max_possible(
     df: pd.DataFrame,
     *,
     agent_col: str = "hydro_agent_mwh",
-    hist_col: str = "hydro_hist_mwh",
+    max_daily_mwh: float = 768.0,
 ) -> dict[str, float]:
-    """Hydropower: total generation relative to historic (fraction).
+    """Hydropower: total generation relative to a practical maximum (fraction).
 
-    Computed as sum(agent) / sum(historic) over the test period.
+    The denominator is ``max_daily_mwh * n_valid_days``. By default
+    ``max_daily_mwh`` is 768 MWh/day, which is the 32 MW plant-capacity
+    ceiling over 24 hours already enforced by the hydropower model.
     """
-    out: dict[str, float] = {}
+    out: dict[str, float] = {"hydropower_frac_of_max_possible": float("nan")}
 
     # If the experiment did not include hydropower, report NA.
     if not _objective_is_active(df, "hydropower"):
-        out["hydropower_frac_of_historic"] = float("nan")
         return out
-    if agent_col not in df.columns or hist_col not in df.columns:
-        out["hydropower_frac_of_historic"] = float("nan")
+    if agent_col not in df.columns:
         return out
 
-    a = df[agent_col].astype(float)
-    h = df[hist_col].astype(float)
-    denom = float(np.nansum(h.values))
-    if denom == 0.0:
-        out["hydropower_frac_of_historic"] = float("nan")
+    a = pd.to_numeric(df[agent_col], errors="coerce")
+    n_valid = int(a.notna().sum())
+    if n_valid <= 0:
         return out
 
-    out["hydropower_frac_of_historic"] = float(np.nansum(a.values) / denom)
+    denom = float(max_daily_mwh) * float(n_valid)
+    if denom <= 0.0:
+        return out
+
+    out["hydropower_frac_of_max_possible"] = float(np.nansum(a.to_numpy(dtype=float)) / denom)
     return out
 
 
-def _metric_storage_frac_of_historic(
+def _metric_storage_frac_of_max_possible(
     df: pd.DataFrame,
     *,
     agent_col: str = "storage_agent_af_end",
     fallback_agent_col: str = "storage_agent_af",
-    hist_col: str = "storage_hist_af",
+    max_col: str = "max_storage_af",
+    default_max_storage_af: float = 1_731_750.0,
 ) -> dict[str, float]:
-    """Storage: total storage relative to historic (fraction).
+    """Storage: total storage relative to maximum possible storage (fraction).
 
-    Computed as sum(agent storage) / sum(historic storage) over the test period.
-    This is intentionally always computed when the columns are available; it is
-    a descriptive benchmark rather than an objective-gated score.
+    Computed as ``sum(agent storage) / sum(max storage)`` over the rollout,
+    which is equivalent to the mean daily storage fraction when ``max_storage_af``
+    is constant. This metric is intentionally independent of the historical series.
     """
-    out: dict[str, float] = {"storage_frac_of_historic": float("nan")}
+    out: dict[str, float] = {"storage_frac_of_max_possible": float("nan")}
     agent_name = agent_col if agent_col in df.columns else fallback_agent_col
-    if agent_name not in df.columns or hist_col not in df.columns:
+    if agent_name not in df.columns:
         return out
 
-    a = df[agent_name].astype(float)
-    h = df[hist_col].astype(float)
-    denom = float(np.nansum(h.values))
-    if denom == 0.0:
+    storage = pd.to_numeric(df[agent_name], errors="coerce")
+    if max_col in df.columns:
+        max_storage = pd.to_numeric(df[max_col], errors="coerce")
+    else:
+        max_storage = pd.Series(float(default_max_storage_af), index=df.index, dtype=float)
+
+    valid = storage.notna() & max_storage.notna()
+    if not bool(valid.any()):
         return out
 
-    out["storage_frac_of_historic"] = float(np.nansum(a.values) / denom)
+    denom = float(np.nansum(max_storage[valid].to_numpy(dtype=float)))
+    if denom <= 0.0:
+        return out
+
+    out["storage_frac_of_max_possible"] = float(
+        np.nansum(storage[valid].to_numpy(dtype=float)) / denom
+    )
     return out
 
 
@@ -933,8 +947,8 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
         "flooding_frac_days_met": float("nan"),
         "spr_curve_mean_abs_error_cfs": float("nan"),
         "spr_curve_frac_days_within_500cfs": float("nan"),
-        "hydropower_frac_of_historic": float("nan"),
-        "storage_frac_of_historic": float("nan"),
+        "hydropower_frac_of_max_possible": float("nan"),
+        "storage_frac_of_max_possible": float("nan"),
         "niip_frac_days_demand_met_in_window": float("nan"),
         "niip_annual_volume_frac_of_contract": float("nan"),
     }
@@ -954,7 +968,15 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
             high_af = 1_731_750.0
         s = df_eval["storage_hist_af"].astype(float)
         out["dam_safety_frac_days_within_storage_bounds"] = float(((s >= float(low_af)) & (s <= float(high_af))).mean())
-        out["storage_frac_of_historic"] = 1.0
+        max_storage_series = pd.to_numeric(df_eval.get("max_storage_af", float(high_af)), errors="coerce")
+        if not isinstance(max_storage_series, pd.Series):
+            max_storage_series = pd.Series(float(high_af), index=df_eval.index, dtype=float)
+        valid_storage = s.notna() & max_storage_series.notna()
+        denom_storage = float(np.nansum(max_storage_series[valid_storage].to_numpy(dtype=float)))
+        if denom_storage > 0.0:
+            out["storage_frac_of_max_possible"] = float(
+                np.nansum(s[valid_storage].to_numpy(dtype=float)) / denom_storage
+            )
 
     # ESA min flow on historical releases.
     if {"animas_farmington_q_cfs", "release_cfs"}.issubset(df_eval.columns):
@@ -1000,10 +1022,15 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
                 if met_flags:
                     out[f"spr_freq_years_meeting_{thr_i}cfs_{dur_i}d"] = float(np.mean(met_flags))
 
-    # Historic relative-to-historic metrics are 1.0 by construction when the
-    # necessary historic columns are available.
-    if "hydro_hist_mwh" in df_eval.columns and float(np.nansum(df_eval["hydro_hist_mwh"].astype(float).to_numpy())) != 0.0:
-        out["hydropower_frac_of_historic"] = 1.0
+    # Historic hydropower relative to a practical plant-capacity maximum.
+    if "hydro_hist_mwh" in df_eval.columns:
+        hydro_hist = pd.to_numeric(df_eval["hydro_hist_mwh"], errors="coerce")
+        n_valid_hydro = int(hydro_hist.notna().sum())
+        denom_hydro = 768.0 * float(n_valid_hydro)
+        if denom_hydro > 0.0:
+            out["hydropower_frac_of_max_possible"] = float(
+                np.nansum(hydro_hist.to_numpy(dtype=float)) / denom_hydro
+            )
 
     # NIIP historic delivery is not explicitly represented in the current eval
     # rollout export, so leave NIIP benchmark cells blank for now.
@@ -1026,8 +1053,8 @@ METRIC_REGISTRY: dict[str, MetricSpec] = {
     "flooding": MetricSpec(func=_metric_flooding_frac_days_met, requires=()),
     "spring_peak_release": MetricSpec(func=_metric_spring_peak_release_scoreboard, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
     "spring_peak_release_detail": MetricSpec(func=_metric_spring_peak_release, requires=("release_sj_main_cfs", "animas_farmington_q_cfs")),
-    "hydropower": MetricSpec(func=_metric_hydropower_frac_of_historic, requires=()),
-    "storage_relative": MetricSpec(func=_metric_storage_frac_of_historic, requires=()),
+    "hydropower": MetricSpec(func=_metric_hydropower_frac_of_max_possible, requires=()),
+    "storage_relative": MetricSpec(func=_metric_storage_frac_of_max_possible, requires=()),
     "niip": MetricSpec(func=_metric_niip_delivery_and_volume, requires=()),
 
     # Optional extra objective diagnostics

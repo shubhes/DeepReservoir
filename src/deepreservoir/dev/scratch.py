@@ -1,3 +1,5 @@
+/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python -m deepreservoir.drl.cli submit-sweep --spec /projects/vote/DeepReservoir/hpc/set1.json
+
 """VS Code-friendly scratch runner (cell-by-cell).
 
 This scratch is pre-configured to demonstrate a common workflow:

@@ -240,6 +240,7 @@ _CONFIG_OVERALL_ID_COLUMNS = ["config_id", "config_label"]
 # deeper diagnostics so the front page remains a clean cross-run comparison view.
 _SUMMARY_METRICS = (
     "dam_safety_frac_days_within_storage_bounds",
+    "storage_frac_of_max_possible",
     "esa_min_flow_frac_days_met",
     "flooding_frac_days_met",
     "spr_curve_mean_abs_error_cfs",
@@ -248,8 +249,7 @@ _SUMMARY_METRICS = (
     "spr_freq_years_meeting_8000cfs_19d",
     "spr_freq_years_meeting_5000cfs_20d",
     "spr_freq_years_meeting_2500cfs_10d",
-    "hydropower_frac_of_historic",
-    "storage_frac_of_historic",
+    "hydropower_frac_of_max_possible",
     "niip_frac_days_demand_met_in_window",
     "niip_annual_volume_frac_of_contract",
 )
@@ -338,7 +338,7 @@ def _records_to_dataframes(
     ordered_metric_cols = _order_metric_columns(metric_cols)
     df_all = df_all[_ID_COLUMNS + ordered_metric_cols]
 
-    summary_cols = [c for c in _SUMMARY_METRICS if c in df_all.columns]
+    summary_cols = _order_metric_columns([c for c in _SUMMARY_METRICS if c in df_all.columns])
     df_summary = df_all[["experiment", "eval"] + summary_cols].copy()
     df_full = df_all.copy()
     df_index = pd.DataFrame(index_rows)
@@ -375,11 +375,13 @@ def _build_historic_summary_df(*, records: list[EvalMetricsRecord], runs_root: P
                 continue
         metrics = compute_historic_summary_metrics(df_roll)
         row: dict[str, object] = {"eval": eval_label}
-        for col in _SUMMARY_METRICS:
+        ordered_summary_cols = _order_metric_columns(list(_SUMMARY_METRICS))
+        for col in ordered_summary_cols:
             row[col] = metrics.get(col, float("nan"))
         rows.append(row)
         seen.add(eval_label)
-    return pd.DataFrame(rows, columns=["eval", *_SUMMARY_METRICS]) if rows else pd.DataFrame(columns=["eval", *_SUMMARY_METRICS])
+    ordered_summary_cols = _order_metric_columns(list(_SUMMARY_METRICS))
+    return pd.DataFrame(rows, columns=["eval", *ordered_summary_cols]) if rows else pd.DataFrame(columns=["eval", *ordered_summary_cols])
 
 
 # -----------------------------------------------------------------------------
@@ -509,27 +511,27 @@ _EXACT_SPECS: dict[str, MetricDisplaySpec] = {
         color_rule="higher_good",
         description=METRIC_DEFINITIONS.get("spr_curve_frac_days_within_500cfs", ""),
     ),
-    "hydropower_frac_of_historic": MetricDisplaySpec(
-        raw_name="hydropower_frac_of_historic",
-        label="Hydro / historic",
+    "hydropower_frac_of_max_possible": MetricDisplaySpec(
+        raw_name="hydropower_frac_of_max_possible",
+        label="Hydro / max possible",
         group="Hydropower",
         order=10,
         include_summary=True,
         include_full=True,
         number_format="0.0%",
         color_rule="higher_good",
-        description=METRIC_DEFINITIONS.get("hydropower_frac_of_historic", ""),
+        description=METRIC_DEFINITIONS.get("hydropower_frac_of_max_possible", ""),
     ),
-    "storage_frac_of_historic": MetricDisplaySpec(
-        raw_name="storage_frac_of_historic",
-        label="Storage / historic",
+    "storage_frac_of_max_possible": MetricDisplaySpec(
+        raw_name="storage_frac_of_max_possible",
+        label="Storage / max possible",
         group="Dam Safety",
         order=15,
         include_summary=True,
         include_full=True,
         number_format="0.0%",
         color_rule="higher_good",
-        description=METRIC_DEFINITIONS.get("storage_frac_of_historic", ""),
+        description=METRIC_DEFINITIONS.get("storage_frac_of_max_possible", ""),
     ),
     "niip_frac_days_demand_met_in_window": MetricDisplaySpec(
         raw_name="niip_frac_days_demand_met_in_window",
@@ -825,7 +827,10 @@ _ROLLUP_META_COLS = [
 
 
 def _build_config_rollup_tables(source_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    metric_cols = [c for c in _SUMMARY_METRICS if c in source_df.columns]
+    metric_cols = sorted(
+        [c for c in _SUMMARY_METRICS if c in source_df.columns],
+        key=lambda name: (_GROUP_ORDER.get(get_metric_display_spec(name).group, 999), get_metric_display_spec(name).order, get_metric_display_spec(name).label.lower(), name.lower()),
+    )
     if source_df.empty:
         return pd.DataFrame(columns=_CONFIG_EVAL_ID_COLUMNS), pd.DataFrame(columns=_CONFIG_OVERALL_ID_COLUMNS)
 
@@ -1062,6 +1067,9 @@ def _write_run_index_sheet(*, wb: Workbook, df: pd.DataFrame) -> None:
     ws.freeze_panes = "A4"
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(df.shape[1])}{max(header_row + 1, ws.max_row)}"
     _set_plain_column_widths(ws)
+    if "reward_spec" in df.columns:
+        reward_col_idx = list(df.columns).index("reward_spec") + 1
+        ws.column_dimensions[get_column_letter(reward_col_idx)].width = 72
 
 
 
@@ -1103,7 +1111,6 @@ def _write_definitions_sheet(
 
     ws.freeze_panes = "A4"
     _set_plain_column_widths(ws)
-
 
 # -----------------------------------------------------------------------------
 # Helpers: discovery / metadata
@@ -1422,8 +1429,8 @@ _FIXED_RANGE_RULES: dict[str, tuple[ColorRule, float, float]] = {
     "spr_freq_years_meeting_8000cfs_19d": ("higher_good", 0.0, 1.0),
     "spr_freq_years_meeting_5000cfs_20d": ("higher_good", 0.0, 1.0),
     "spr_freq_years_meeting_2500cfs_10d": ("higher_good", 0.0, 1.0),
-    "hydropower_frac_of_historic": ("higher_good", 0.0, 1.5),
-    "storage_frac_of_historic": ("higher_good", 0.0, 1.5),
+    "hydropower_frac_of_max_possible": ("higher_good", 0.0, 1.0),
+    "storage_frac_of_max_possible": ("higher_good", 0.0, 1.0),
     "niip_frac_days_demand_met_in_window": ("higher_good", 0.0, 1.0),
     "niip_annual_volume_frac_of_contract": ("higher_good", 0.0, 1.5),
 }

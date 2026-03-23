@@ -8,7 +8,7 @@
     "val_end": "2010",
     "val_freq": 50000,
     "episode_length_train": 3600,
-    "total_timesteps": 200000,
+    "total_timesteps": 500000,
     "algo": "ppo",
     "device": "cpu",
     "gamma": 0.999,
