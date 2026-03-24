@@ -20,8 +20,6 @@ Tip: run ``python -m deepreservoir.drl.cli info`` to see the available
 (date-clipped) model_data range.
 """
 
-/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python -m deepreservoir.drl.cli submit-sweep --spec /projects/vote/DeepReservoir/hpc/set4.json
-
 from __future__ import annotations
 
 from pathlib import Path

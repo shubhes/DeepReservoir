@@ -604,6 +604,43 @@ def esa_spring_peak_farmington_10k(ctx: RewardContext) -> float:
     return 30 * magnitude * balance
 
 
+@register_reward("esa_spring_peak_release", "bluff_curve")
+def esa_spring_peak_bluff_curve(ctx: RewardContext) -> float:
+    """
+    SPR curve-matching reward aligned to the evaluation proxy.
+
+    Unlike the legacy ``curve`` variant, this compares the *lagged Bluff proxy*
+    (``sj_at_farmington_lag2_cfs``) against the SPR target curve. This is more
+    directly aligned with the evaluation metric, which also scores the Bluff
+    proxy against the target curve.
+
+    Behavior
+    --------
+    - Outside the SPR window -> 0
+    - Before the lagged proxy is available -> 0
+    - Inside the SPR window -> reward in [-1, 1]
+    """
+    date = pd.to_datetime(ctx.date)
+    target = float(_SPRING_PEAK_CURVE.target_cfs_from_date(date))
+
+    if target <= 0.0:
+        return 0.0
+
+    bluff = ctx.info.get("sj_at_farmington_lag2_cfs", None)
+    if bluff is None or not np.isfinite(bluff):
+        return 0.0
+
+    actual = float(bluff)
+
+    # Slightly looser than the release-based curve reward because the Bluff
+    # proxy includes external hydrology (Animas contribution + lag).
+    tolerance_cfs = 1000.0
+    err = abs(actual - target)
+
+    r = 1.0 - (err / (tolerance_cfs + 1e-9))
+    return float(np.clip(r, -1.0, 1.0))
+
+
 @register_reward("esa_spring_peak_release", "bluff_10k")
 def esa_spring_peak_bluff_10k(ctx: RewardContext) -> float:
     """
