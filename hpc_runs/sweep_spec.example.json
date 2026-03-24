@@ -1,0 +1,100 @@
+{
+  "sweep_name": "phase1_screen_v1",
+  "runs_root": "./runs",
+  "base_train": {
+    "train_start": "1980",
+    "train_end": "2010",
+    "val_start": "2001",
+    "val_end": "2010",
+    "val_freq": 50000,
+    "episode_length_train": 3600,
+    "total_timesteps": 500000,
+    "algo": "ppo",
+    "device": "cpu",
+    "gamma": 0.999,
+    "n_envs": 1,
+    "n_steps": 2048,
+    "batch_size": 2048,
+    "n_epochs": 10,
+    "track_reward_components": true
+  },
+  "base_eval": {
+    "which_metrics": "core",
+    "save_plots": true,
+    "save_rollout": false,
+    "save_metrics": true,
+    "windows": [
+      {
+        "name": "holdout_2011_2020",
+        "start": "2011",
+        "end": "2020"
+      }
+    ]
+  },
+  "experiments": [
+    {
+      "name": "base_n015_spr6_f1_h1",
+      "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
+      "seeds": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "niip_low_n010_spr6_f1_h1",
+      "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.10,esa_spring_peak_release:curve@6.0",
+      "seeds": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "niip_high_n020_spr6_f1_h1",
+      "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.20,esa_spring_peak_release:curve@6.0",
+      "seeds": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "spr_high_n015_spr8_f1_h1",
+      "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@8.0",
+      "seeds": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "flood_high_n015_spr6_f125_h1",
+      "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.25,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
+      "seeds": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "hydro_high_n015_spr6_f1_h125",
+      "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.25,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
+      "seeds": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "slurm": {
+    "account": "y2020-bf",
+    "time": "09:30:00",
+    "cpus_per_task": 4,
+    "mem": "16G",
+    "array_parallelism": 20,
+    "activate": "export PYTHONPATH=/vast/projects/vote/DeepReservoir/src:$PYTHONPATH",
+    "shell": "/bin/bash -l",
+    "python_executable": "/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python"
+  }
+}
