@@ -8,7 +8,7 @@
     "val_end": "2010",
     "val_freq": 100000,
     "episode_length_train": 3600,
-    "total_timesteps": 400000,
+    "total_timesteps": 800000,
     "algo": "ppo",
     "device": "cpu",
     "gamma": 0.999,
@@ -35,99 +35,154 @@
     {
       "name": "bal_n010_spr4",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.10,esa_spring_peak_release:bluff_curve@4.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n010_spr6",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.10,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n010_spr8",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.10,esa_spring_peak_release:bluff_curve@8.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n015_spr4",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@4.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n015_spr6",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n015_spr8",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@8.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n020_spr4",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.20,esa_spring_peak_release:bluff_curve@4.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n020_spr6",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.20,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "bal_n020_spr8",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.20,esa_spring_peak_release:bluff_curve@8.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
-
     {
       "name": "ops_f075_h075",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@0.75,hydropower:baseline@0.75,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f075_h100",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@0.75,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f075_h125",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@0.75,hydropower:baseline@1.25,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f100_h075",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@0.75,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f100_h125",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.25,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f125_h075",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.25,hydropower:baseline@0.75,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f125_h100",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.25,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_f125_h125",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.25,hydropower:baseline@1.25,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "ops_s125_f100_h100",
       "reward_spec": "dam_safety:storage_band_env@1.25,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
-
     {
       "name": "ppo_g995_ns1024",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4],
+      "seeds": [
+        0,
+        1
+      ],
       "train_overrides": {
         "gamma": 0.995,
         "n_steps": 1024,
@@ -137,7 +192,10 @@
     {
       "name": "ppo_g995_ns2048",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4],
+      "seeds": [
+        0,
+        1
+      ],
       "train_overrides": {
         "gamma": 0.995
       }
@@ -145,7 +203,10 @@
     {
       "name": "ppo_g999_ns1024",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4],
+      "seeds": [
+        0,
+        1
+      ],
       "train_overrides": {
         "n_steps": 1024,
         "batch_size": 1024
@@ -154,30 +215,38 @@
     {
       "name": "ppo_g999_ns4096",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:bluff_curve@6.0",
-      "seeds": [0, 1, 2, 3, 4],
+      "seeds": [
+        0,
+        1
+      ],
       "train_overrides": {
         "n_steps": 4096,
         "batch_size": 4096
       }
     },
-
     {
       "name": "anchor_legacy_release_curve",
       "reward_spec": "dam_safety:storage_band_shaped@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     },
     {
       "name": "anchor_env_release_curve",
       "reward_spec": "dam_safety:storage_band_env@1.0,esa_min_flow:baseline@1.0,flooding:baseline@1.0,hydropower:baseline@1.0,niip:colab_band@0.15,esa_spring_peak_release:curve@6.0",
-      "seeds": [0, 1, 2, 3, 4]
+      "seeds": [
+        0,
+        1
+      ]
     }
   ],
   "slurm": {
     "account": "y2020-bf",
-    "time": "9:30:00",
+    "time": "09:30:00",
     "cpus_per_task": 4,
     "mem": "16G",
-    "array_parallelism": 20,
+    "array_parallelism": 24,
     "activate": "export PYTHONPATH=/vast/projects/vote/DeepReservoir/src:$PYTHONPATH",
     "shell": "/bin/bash -l",
     "python_executable": "/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python"
