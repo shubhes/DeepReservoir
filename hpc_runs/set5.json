@@ -177,7 +177,7 @@
     "time": "9:30:00",
     "cpus_per_task": 4,
     "mem": "16G",
-    "array_parallelism": 50,
+    "array_parallelism": 20,
     "activate": "export PYTHONPATH=/vast/projects/vote/DeepReservoir/src:$PYTHONPATH",
     "shell": "/bin/bash -l",
     "python_executable": "/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python"
