@@ -174,7 +174,7 @@
   ],
   "slurm": {
     "account": "y2020-bf",
-    "time": "12:00:00",
+    "time": "9:30:00",
     "cpus_per_task": 4,
     "mem": "16G",
     "array_parallelism": 50,
