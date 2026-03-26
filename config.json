@@ -1,0 +1,39 @@
+{
+  "sweep_name": "colab_main_equivalent",
+  "runs_root": "./runs",
+  "base_train": {
+    "use_full_record": true,
+    "episode_length_train": 3600,
+    "n_episodes": 400,
+    "algo": "ppo",
+    "device": "cpu",
+    "n_envs": 1,
+    "use_subproc_vec": false,
+    "n_steps": 3600,
+    "batch_size": 64,
+    "n_epochs": 10,
+    "track_reward_components": true
+  },
+  "base_eval": {
+    "which_metrics": "all",
+    "save_plots": true,
+    "save_rollout": true,
+    "save_metrics": true,
+    "windows": [
+      {
+        "name": "last_8_wy_default_split",
+        "start": "2013",
+        "end": "2020"
+      }
+    ]
+  },
+  "experiments": [
+    {
+      "name": "colab_main_reward_stack",
+      "reward_spec": "dam_safety:storage_band,niip:colab_band,hydropower:baseline,esa_spring_peak_release:farmington_10k",
+      "seeds": [
+        0
+      ]
+    }
+  ]
+}
