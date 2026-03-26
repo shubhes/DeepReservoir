@@ -1,5 +1,5 @@
 {
-  "sweep_name": "colab_main_equivalent",
+  "sweep_name": "main_equivalent",
   "runs_root": "./runs",
   "base_train": {
     "use_full_record": true,
