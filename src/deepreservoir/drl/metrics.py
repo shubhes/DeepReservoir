@@ -25,6 +25,7 @@ How to add a new metric
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -35,6 +36,7 @@ from deepreservoir.define_env.spring_peak_release_curve import SpringPeakRelease
 
 
 _CFS_DAY_TO_ACRE_FEET = 86400.0 / 43560.0  # 1 cfs sustained for 1 day -> acre-feet
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 # -----------------------------------------------------------------------------
@@ -667,6 +669,33 @@ def _metric_storage_frac_of_max_possible(
     return out
 
 
+@lru_cache(maxsize=1)
+def _load_niip_historic_delivery_series() -> pd.Series | None:
+    """Load the historical NIIP delivery series (CFS) from the repo data dir."""
+    path = _REPO_ROOT / "data" / "niip" / "NAVAJOINDIANIRRIGATIONPROJECT07-17-2025T13.21.47.csv"
+    if not path.exists():
+        return None
+
+    try:
+        df = pd.read_csv(
+            path,
+            usecols=["Date", "Flow (cfs)"],
+            skipinitialspace=True,
+        )
+    except Exception:
+        return None
+
+    dates = pd.to_datetime(df.get("Date"), format="%d-%b-%y", errors="coerce")
+    flows = pd.to_numeric(df.get("Flow (cfs)"), errors="coerce")
+    series = pd.Series(flows.to_numpy(dtype=float), index=dates, name="niip_flow_cfs")
+    series = series[series.index.notna() & series.notna()]
+    if series.empty:
+        return None
+
+    series = series[~series.index.duplicated(keep="last")].sort_index()
+    return series
+
+
 def _niip_get_delivery_series(
     df: pd.DataFrame,
     *,
@@ -719,6 +748,59 @@ def _niip_get_demand_series(
     return pd.Series(arr, index=df.index, name=demand_col)
 
 
+def _compute_niip_delivery_and_volume_from_series(
+    *,
+    index: pd.DatetimeIndex,
+    demand: pd.Series,
+    delivery: pd.Series,
+    doy_start: int = 50,
+    doy_end: int = 300,
+    demand_positive_eps: float = 1e-9,
+    tol_cfs: float = 0.0,
+    require_delivery_nonnull: bool = False,
+) -> dict[str, float]:
+    """Compute NIIP metrics from aligned demand and delivery series."""
+    out = {
+        "niip_frac_days_demand_met_in_window": float("nan"),
+        "niip_annual_volume_frac_of_contract": float("nan"),
+    }
+
+    idx = pd.DatetimeIndex(index)
+    demand = pd.Series(demand, index=idx, dtype=float)
+    delivery = pd.Series(delivery, index=idx, dtype=float)
+
+    doys = idx.dayofyear
+    in_window = (doys >= int(doy_start)) & (doys <= int(doy_end))
+    active = in_window & demand.notna() & (demand.astype(float) > float(demand_positive_eps))
+    if require_delivery_nonnull:
+        active = active & delivery.notna()
+
+    n_active = int(active.sum())
+    if n_active == 0:
+        return out
+
+    met = delivery.astype(float) >= (demand.astype(float) - float(tol_cfs))
+    out["niip_frac_days_demand_met_in_window"] = float(met[active].mean())
+
+    years = idx.year
+    ratios: list[float] = []
+    for y in np.unique(years):
+        m = active & (years == y)
+        if not bool(m.any()):
+            continue
+
+        delivered_af = float(np.nansum(delivery[m].astype(float).to_numpy()) * _CFS_DAY_TO_ACRE_FEET)
+        contract_af = float(np.nansum(demand[m].astype(float).to_numpy()) * _CFS_DAY_TO_ACRE_FEET)
+        if contract_af <= 0.0:
+            continue
+        ratios.append(delivered_af / contract_af)
+
+    if ratios:
+        out["niip_annual_volume_frac_of_contract"] = float(np.mean(ratios))
+
+    return out
+
+
 def _metric_niip_delivery_and_volume(
     df: pd.DataFrame,
     *,
@@ -752,35 +834,16 @@ def _metric_niip_delivery_and_volume(
     if demand is None or delivery is None:
         return out
 
-    doys = df.index.dayofyear
-    in_window = (doys >= int(doy_start)) & (doys <= int(doy_end))
-    active = in_window & demand.notna() & (demand.astype(float) > float(demand_positive_eps))
-    n_active = int(active.sum())
-    if n_active == 0:
-        return out
-
-    # 1) % of time within the active window that daily demand is met
-    met = delivery.astype(float) >= (demand.astype(float) - float(tol_cfs))
-    out["niip_frac_days_demand_met_in_window"] = float(met[active].mean())
-
-    # 2) Annual volume (delivered / contract), averaged across calendar years
-    years = df.index.year
-    ratios: list[float] = []
-    for y in np.unique(years):
-        m = active & (years == y)
-        if not bool(m.any()):
-            continue
-
-        delivered_af = float(np.nansum(delivery[m].astype(float).to_numpy()) * _CFS_DAY_TO_ACRE_FEET)
-        contract_af = float(np.nansum(demand[m].astype(float).to_numpy()) * _CFS_DAY_TO_ACRE_FEET)
-        if contract_af <= 0.0:
-            continue
-        ratios.append(delivered_af / contract_af)
-
-    if ratios:
-        out["niip_annual_volume_frac_of_contract"] = float(float(np.mean(ratios)))
-
-    return out
+    return _compute_niip_delivery_and_volume_from_series(
+        index=pd.DatetimeIndex(df.index),
+        demand=demand,
+        delivery=delivery,
+        doy_start=doy_start,
+        doy_end=doy_end,
+        demand_positive_eps=demand_positive_eps,
+        tol_cfs=tol_cfs,
+        require_delivery_nonnull=False,
+    )
 
 
 
@@ -1033,8 +1096,22 @@ def compute_historic_summary_metrics(df_eval: pd.DataFrame) -> dict[str, float]:
                 np.nansum(hydro_hist.to_numpy(dtype=float)) / denom_hydro
             )
 
-    # NIIP historic delivery is not explicitly represented in the current eval
-    # rollout export, so leave NIIP benchmark cells blank for now.
+    # NIIP historic delivery benchmark from the observed NIIP diversion record.
+    niip_hist = _load_niip_historic_delivery_series()
+    if niip_hist is not None:
+        eval_index = pd.DatetimeIndex(df_eval.index).normalize()
+        delivery_hist = niip_hist.reindex(eval_index)
+        demand_hist = _niip_get_demand_series(pd.DataFrame(index=eval_index))
+        if demand_hist is not None:
+            out.update(
+                _compute_niip_delivery_and_volume_from_series(
+                    index=eval_index,
+                    demand=demand_hist,
+                    delivery=delivery_hist,
+                    require_delivery_nonnull=True,
+                )
+            )
+
     return out
 
 

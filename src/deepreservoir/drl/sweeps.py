@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -61,16 +62,24 @@ class SweepSpecError(ValueError):
     pass
 
 
+
+def slurm_available() -> bool:
+    return shutil.which("sbatch") is not None
+
+
+
 def _expand_pathlike(value: str | os.PathLike[str] | None) -> Path | None:
     if value is None:
         return None
     return Path(os.path.expandvars(os.path.expanduser(str(value)))).resolve()
 
 
+
 def _sanitize_name(value: str) -> str:
     s = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value).strip())
     s = re.sub(r"_+", "_", s).strip("._-")
     return s or "item"
+
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -81,11 +90,13 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data
 
 
+
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True)
         f.write("\n")
+
 
 
 def _merge_dict(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
@@ -97,6 +108,7 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any] | None) -> dict[s
     return out
 
 
+
 def _validate_train_args(d: dict[str, Any], *, context: str) -> dict[str, Any]:
     extra = sorted(set(d) - TRAIN_KEYS)
     if extra:
@@ -104,11 +116,13 @@ def _validate_train_args(d: dict[str, Any], *, context: str) -> dict[str, Any]:
     return d
 
 
+
 def _validate_eval_args(d: dict[str, Any], *, context: str) -> dict[str, Any]:
     extra = sorted(set(d) - EVAL_KEYS)
     if extra:
         raise SweepSpecError(f"Unknown eval key(s) in {context}: {extra}")
     return d
+
 
 
 def _normalize_windows(windows: list[dict[str, Any]] | None, *, context: str) -> list[dict[str, str]]:
@@ -129,6 +143,7 @@ def _normalize_windows(windows: list[dict[str, Any]] | None, *, context: str) ->
         seen.add(name)
         out.append({"name": name, "start": str(start), "end": str(end)})
     return out
+
 
 
 def _normalize_spec(spec_path: Path) -> dict[str, Any]:
@@ -220,6 +235,7 @@ def _normalize_spec(spec_path: Path) -> dict[str, Any]:
     return normalized
 
 
+
 def _task_csv_rows(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for task in tasks:
@@ -244,6 +260,7 @@ def _task_csv_rows(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -253,6 +270,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
 
 
 def _shell_setup_lines(normalized: dict[str, Any]) -> list[str]:
@@ -271,6 +289,7 @@ def _shell_setup_lines(normalized: dict[str, Any]) -> list[str]:
     return lines
 
 
+
 def _shell_executable(normalized: dict[str, Any]) -> str:
     slurm = normalized.get("slurm", {}) or {}
     shell = slurm.get("shell")
@@ -281,12 +300,14 @@ def _shell_executable(normalized: dict[str, Any]) -> str:
     return "/bin/bash"
 
 
+
 def _python_executable(normalized: dict[str, Any]) -> str:
     slurm = normalized.get("slurm", {}) or {}
     py = slurm.get("python_executable")
     if py:
         return str(py)
     return "python"
+
 
 
 def _sbatch_lines(normalized: dict[str, Any], *, n_tasks: int, logs_dir: Path) -> list[str]:
@@ -321,6 +342,7 @@ def _sbatch_lines(normalized: dict[str, Any], *, n_tasks: int, logs_dir: Path) -
     return lines
 
 
+
 def _write_script(path: Path, text: str | list[str], shell_executable: str = "/bin/bash") -> None:
     if isinstance(text, list):
         script_text = "\n".join(str(line) for line in text)
@@ -341,6 +363,8 @@ def _write_script(path: Path, text: str | list[str], shell_executable: str = "/b
 
     path.write_text(script_text, encoding="utf-8")
     path.chmod(path.stat().st_mode | 0o111)
+
+
 
 def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = None) -> dict[str, Any]:
     spec_path = Path(spec_path).resolve()
@@ -426,6 +450,7 @@ def materialize_sweep_plan(spec_path: Path | str, outdir: Path | str | None = No
     }
 
 
+
 def submit_materialized_sweep(control_dir: Path | str) -> dict[str, str]:
     control_dir = Path(control_dir).resolve()
     array_script = control_dir / "sweep_array.sbatch"
@@ -434,6 +459,11 @@ def submit_materialized_sweep(control_dir: Path | str) -> dict[str, str]:
         raise FileNotFoundError(f"Missing array script: {array_script}")
     if not report_script.exists():
         raise FileNotFoundError(f"Missing report script: {report_script}")
+    if not slurm_available():
+        raise RuntimeError(
+            "submit_materialized_sweep() requires sbatch, but sbatch was not found on PATH. "
+            "Use run_materialized_sweep_locally() for local execution."
+        )
 
     array_proc = subprocess.run(
         ["sbatch", "--parsable", str(array_script)],
@@ -460,6 +490,7 @@ def submit_materialized_sweep(control_dir: Path | str) -> dict[str, str]:
     }
 
 
+
 def _bool_flag(argv: list[str], *, positive_key: str, value: Any, pos_flag: str, neg_flag: str | None = None) -> None:
     if value is None:
         return
@@ -469,10 +500,12 @@ def _bool_flag(argv: list[str], *, positive_key: str, value: Any, pos_flag: str,
         argv.append(neg_flag)
 
 
+
 def _append_kv(argv: list[str], flag: str, value: Any) -> None:
     if value is None:
         return
     argv.extend([flag, str(value)])
+
 
 
 def _build_train_argv(task: dict[str, Any]) -> list[str]:
@@ -510,6 +543,7 @@ def _build_train_argv(task: dict[str, Any]) -> list[str]:
     return argv
 
 
+
 def _build_eval_argv(task: dict[str, Any], window: dict[str, str]) -> tuple[list[str], Path]:
     train_args = task["train_args"]
     eval_args = task["eval_args"]
@@ -542,6 +576,7 @@ def _build_eval_argv(task: dict[str, Any], window: dict[str, str]) -> tuple[list
     return argv, outdir
 
 
+
 def _eval_complete(outdir: Path, *, save_plots: bool, save_rollout: bool, save_metrics: bool) -> bool:
     if save_metrics and not (outdir / "eval_metrics.csv").exists():
         return False
@@ -550,6 +585,7 @@ def _eval_complete(outdir: Path, *, save_plots: bool, save_rollout: bool, save_m
     if save_plots and not (outdir / "plots").is_dir():
         return False
     return True
+
 
 
 def _annotate_manifest(logdir: Path, task: dict[str, Any], plan_path: Path) -> None:
@@ -570,6 +606,7 @@ def _annotate_manifest(logdir: Path, task: dict[str, Any], plan_path: Path) -> N
         "seed": int(task.get("seed", 0)),
     }
     model._write_json(manifest_path, manifest)
+
 
 
 def run_sweep_task(plan_path: Path | str, task_id: int, *, skip_complete: bool = True) -> dict[str, Any]:
@@ -629,4 +666,41 @@ def run_sweep_task(plan_path: Path | str, task_id: int, *, skip_complete: bool =
         "logdir": str(logdir),
         "n_pending_evals": len(pending_evals),
         "trained": bool(need_train),
+    }
+
+
+
+def run_materialized_sweep_locally(plan_path: Path | str, *, skip_complete: bool = True, build_report: bool = True) -> dict[str, Any]:
+    from deepreservoir.drl import reporting
+
+    plan_path = Path(plan_path).resolve()
+    plan = _read_json(plan_path)
+    tasks = plan.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise SweepSpecError(f"Plan has no tasks: {plan_path}")
+
+    print("[sweep] sbatch was not found; running materialized sweep locally.")
+
+    task_results: list[dict[str, Any]] = []
+    for task in tasks:
+        result = run_sweep_task(
+            plan_path=plan_path,
+            task_id=int(task["task_id"]),
+            skip_complete=skip_complete,
+        )
+        task_results.append(result)
+
+    report_result: dict[str, Any] | None = None
+    if build_report:
+        runs_root = Path(plan["sweep_root"]).resolve()
+        report_result = reporting.build_master_metrics_workbook(runs_root=runs_root)
+        print(
+            "[sweep] wrote metrics dashboard: "
+            f"{report_result['outpath']} (evals={report_result['n_evals']}, experiments={report_result['n_experiments']})"
+        )
+
+    return {
+        "plan_path": str(plan_path),
+        "task_results": task_results,
+        "report": report_result,
     }

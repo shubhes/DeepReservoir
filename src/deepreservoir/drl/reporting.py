@@ -235,6 +235,11 @@ _ID_COLUMNS = ["experiment", "eval", "display_name"]
 _CONFIG_EVAL_ID_COLUMNS = ["config_id", "eval", "config_label"]
 _CONFIG_OVERALL_ID_COLUMNS = ["config_id", "config_label"]
 
+# Metrics intentionally omitted from the workbook dashboard even if they exist in
+# the raw eval_metrics.csv artifacts.
+_MASTER_METRICS_EXCLUDE = {
+}
+
 # Keep the Excel "Summary" sheet aligned with the compact experiment scoreboard
 # exposed by metrics group ``core``. This deliberately excludes reward totals and
 # deeper diagnostics so the front page remains a clean cross-run comparison view.
@@ -243,8 +248,6 @@ _SUMMARY_METRICS = (
     "storage_frac_of_max_possible",
     "esa_min_flow_frac_days_met",
     "flooding_frac_days_met",
-    "spr_curve_mean_abs_error_cfs",
-    "spr_curve_frac_days_within_500cfs",
     "spr_freq_years_meeting_10000cfs_5d",
     "spr_freq_years_meeting_8000cfs_19d",
     "spr_freq_years_meeting_5000cfs_20d",
@@ -268,6 +271,14 @@ _GROUP_ORDER = {
     "NIIP": 80,
     "Reward Components": 90,
     "Other": 100,
+}
+
+
+_SPR_TARGET_FREQUENCIES = {
+    "spr_freq_years_meeting_10000cfs_5d": 0.20,
+    "spr_freq_years_meeting_8000cfs_19d": 0.33,
+    "spr_freq_years_meeting_5000cfs_20d": 0.50,
+    "spr_freq_years_meeting_2500cfs_10d": 0.80,
 }
 
 
@@ -334,7 +345,7 @@ def _records_to_dataframes(
         rollup_source_rows.append(roll_row)
 
     df_all = pd.DataFrame(rows)
-    metric_cols = [c for c in df_all.columns if c not in _ID_COLUMNS]
+    metric_cols = [c for c in df_all.columns if c not in _ID_COLUMNS and c not in _MASTER_METRICS_EXCLUDE]
     ordered_metric_cols = _order_metric_columns(metric_cols)
     df_all = df_all[_ID_COLUMNS + ordered_metric_cols]
 
@@ -1015,7 +1026,11 @@ def _write_dashboard_sheet(
             continue
         col_idx = ordered_cols.index(name) + 1
         col_values = pd.to_numeric(df[name], errors="coerce")
-        fills = _fills_for_series(col_values, specs[name].color_rule, metric_name=name)
+        spr_target = _spr_target_for_metric_name(name)
+        if spr_target is not None:
+            fills = _fills_for_threshold(col_values, threshold=spr_target)
+        else:
+            fills = _fills_for_series(col_values, specs[name].color_rule, metric_name=name)
         for i, fill in enumerate(fills, start=data_start_row):
             ws.cell(row=i, column=col_idx).fill = fill
 
@@ -1453,6 +1468,21 @@ def _score_from_fixed_range(value: float, *, low: float, high: float, rule: Colo
     if max_abs == 0.0:
         return 1.0
     return max(0.0, 1.0 - min(abs(float(value)) / max_abs, 1.0))
+
+
+def _spr_target_for_metric_name(name: str) -> float | None:
+    return _SPR_TARGET_FREQUENCIES.get(_base_metric_name(name))
+
+
+def _fills_for_threshold(series: pd.Series, *, threshold: float) -> list[PatternFill]:
+    vals = pd.to_numeric(series, errors="coerce")
+    fills: list[PatternFill] = []
+    for v in vals:
+        if pd.isna(v) or not math.isfinite(float(v)):
+            fills.append(_MISSING_FILL)
+            continue
+        fills.append(_fill_for_score(1.0 if float(v) >= float(threshold) else 0.0))
+    return fills
 
 
 def _fills_for_series(series: pd.Series, rule: ColorRule, *, metric_name: str | None = None) -> list[PatternFill]:

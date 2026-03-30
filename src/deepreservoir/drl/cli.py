@@ -295,7 +295,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Metrics filename to scan for recursively.",
     )
 
-
     # ------------------------------------------------------------------
     # plan-sweep
     # ------------------------------------------------------------------
@@ -316,7 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     p_submit = sub.add_parser(
         "submit-sweep",
-        help="Materialize a JSON sweep spec and immediately submit the array + dependent report jobs via sbatch",
+        help="Materialize a JSON sweep spec and submit via SLURM when available, otherwise run locally.",
     )
     p_submit.add_argument("--spec", type=str, required=True, help="Path to a JSON sweep spec.")
     p_submit.add_argument(
@@ -331,7 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     p_task = sub.add_parser(
         "run-sweep-task",
-        help="Run one task from a materialized sweep plan (intended for SLURM arrays)",
+        help="Run one task from a materialized sweep plan (works for SLURM arrays and local testing)",
     )
     p_task.add_argument("--plan", type=str, required=True, help="Path to a plan.json produced by plan-sweep.")
     p_task.add_argument(
@@ -350,7 +349,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 
-
 def cmd_plan_sweep(args) -> None:
     result = sweeps.materialize_sweep_plan(spec_path=args.spec, outdir=args.outdir)
     print(
@@ -360,6 +358,7 @@ def cmd_plan_sweep(args) -> None:
     print(f"[cli] SLURM helper dir: {result['control_dir']}")
 
 
+
 def cmd_submit_sweep(args) -> None:
     plan = sweeps.materialize_sweep_plan(spec_path=args.spec, outdir=args.outdir)
     print(
@@ -367,9 +366,19 @@ def cmd_submit_sweep(args) -> None:
         f"{plan['plan_path']} (tasks={plan['n_tasks']}, sweep_root={plan['sweep_root']})"
     )
     print(f"[cli] SLURM helper dir: {plan['control_dir']}")
-    result = sweeps.submit_materialized_sweep(plan["control_dir"])
-    print(f"[cli] submitted sweep array job: {result['array_jobid']}")
-    print(f"[cli] submitted report job: {result['report_jobid']}")
+
+    if sweeps.slurm_available():
+        result = sweeps.submit_materialized_sweep(plan["control_dir"])
+        print(f"[cli] submitted sweep array job: {result['array_jobid']}")
+        print(f"[cli] submitted report job: {result['report_jobid']}")
+        return
+
+    result = sweeps.run_materialized_sweep_locally(plan["plan_path"])
+    print(
+        "[cli] finished local sweep execution: "
+        f"tasks={len(result['task_results'])} report={result['report']['outpath']}"
+    )
+
 
 
 def cmd_run_sweep_task(args) -> None:
@@ -389,6 +398,7 @@ def cmd_run_sweep_task(args) -> None:
         "[cli] completed sweep task: "
         f"task_id={result['task_id']} status={result['status']} logdir={result['logdir']}"
     )
+
 
 def cmd_info(args) -> None:
     all_data = model.load_all_model_data()
@@ -581,6 +591,7 @@ def cmd_train(args) -> None:
     )
 
 
+
 def cmd_report_metrics(args) -> None:
     from deepreservoir.drl import reporting
 
@@ -595,6 +606,7 @@ def cmd_report_metrics(args) -> None:
         "[cli] wrote metrics dashboard: "
         f"{result['outpath']} (evals={result['n_evals']}, experiments={result['n_experiments']})"
     )
+
 
 
 def cmd_eval(args) -> None:
@@ -640,6 +652,7 @@ def cmd_eval(args) -> None:
         print("\n[cli] eval metrics:\n" + df_metrics.to_string(index=False))
     except Exception:
         pass
+
 
 
 def main(argv=None) -> None:
