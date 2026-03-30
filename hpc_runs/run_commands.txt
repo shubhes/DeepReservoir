@@ -1,1 +1,3 @@
 /vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python -m deepreservoir.drl.cli submit-sweep --spec /projects/vote/DeepReservoir/hpc_runs/set3.json
+
+/vast/home/jschwenk/miniconda3/envs/deepreservoir/bin/python -m deepreservoir.drl.cli submit-sweep --spec /projects/vote/DeepReservoir/hpc_runs/set5.json

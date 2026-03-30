@@ -20,8 +20,8 @@
   },
   "base_eval": {
     "which_metrics": "all",
-    "save_plots": false,
-    "save_rollout": false,
+    "save_plots": true,
+    "save_rollout": true,
     "save_metrics": true,
     "windows": [
       {
