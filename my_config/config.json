@@ -30,7 +30,7 @@
   "experiments": [
     {
       "name": "colab_main_reward_stack",
-      "reward_spec": "dam_safety:storage_band,niip:colab_band,hydropower:baseline,esa_spring_peak_release:farmington_10k",
+      "reward_spec": "dam_safety:storage_band,esa_min_flow:baseline,flooding:baseline,niip:colab_band,hydropower:baseline,esa_spring_peak_release:farmington_10k",
       "seeds": [
         0
       ]
