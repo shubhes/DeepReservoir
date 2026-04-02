@@ -601,7 +601,7 @@ def esa_spring_peak_farmington_10k(ctx: RewardContext) -> float:
     balance = 1.0 - (abs(animas - sanjuan) / (total + 1e-6))
     balance = float(np.clip(balance, 0.0, 1.0))
 
-    return 30 * magnitude * balance
+    return 50 * magnitude * balance
 
 
 @register_reward("esa_spring_peak_release", "bluff_curve")
