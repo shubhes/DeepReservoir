@@ -280,7 +280,7 @@ def dam_safety_storage_band(ctx: RewardContext) -> float:
     x = (storage - target) / span
     r = 1.0 - x**2
     r = float(np.clip(r, -1.0, 1.0))
-    return 3*r
+    return 5*r
 
 @register_reward("dam_safety", "storage_band_shaped")
 def dam_safety_storage_band(ctx: RewardContext) -> float:
@@ -601,7 +601,7 @@ def esa_spring_peak_farmington_10k(ctx: RewardContext) -> float:
     balance = 1.0 - (abs(animas - sanjuan) / (total + 1e-6))
     balance = float(np.clip(balance, 0.0, 1.0))
 
-    return 10 * magnitude * balance
+    return 30 * magnitude * balance
 
 
 @register_reward("esa_spring_peak_release", "bluff_curve")
